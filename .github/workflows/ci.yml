@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-24.04
+            tags: -tags webkit2_41
+            race: -race
+          - os: macos-latest
+            tags: ""
+            race: -race
+          - os: windows-latest
+            tags: ""
+            race: ""
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)"
+
+      - name: go vet
+        run: go vet ${{ matrix.tags }} ./...
+
+      - name: go test
+        run: go test ${{ matrix.tags }} ${{ matrix.race }} ./...
+
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: [go, frontend]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-24.04
+            build_args: -tags webkit2_41
+            artifact: diskchart-linux-amd64
+            artifact_path: build/bin/diskchart
+          - os: macos-latest
+            build_args: -platform darwin/universal -o diskchart
+            artifact: diskchart-darwin-universal
+            artifact_path: build/bin/diskchart-darwin-universal.zip
+          - os: windows-latest
+            build_args: -platform windows/amd64
+            artifact: diskchart-windows-amd64
+            artifact_path: build/bin/diskchart.exe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: wails build
+        run: wails build ${{ matrix.build_args }}
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent build/bin/diskchart.app build/bin/diskchart-darwin-universal.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
