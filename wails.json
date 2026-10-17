@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DiskChart",
+  "outputfilename": "DiskChart",
+  "frontend:install": "pnpm install",
+  "frontend:build": "pnpm run build",
+  "frontend:dev:watcher": "pnpm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Shiming Zhang",
+    "email": "wzshiming@hotmail.com"
+  },
+  "info": {
+    "companyName": "Shiming Zhang",
+    "productName": "DiskChart",
+    "productVersion": "0.0.0",
+    "copyright": "Copyright (c) 2026 Shiming Zhang",
+    "comments": "Disk usage analyzer for macOS, Windows and Linux"
+  }
+}
