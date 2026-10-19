@@ -44,13 +44,14 @@ func TestHardLinkCountedOnce(t *testing.T) {
 
 func TestSymlinkNotFollowed(t *testing.T) {
 	base := t.TempDir()
-	target := filepath.Join(base, "target")
-	writeFile(t, filepath.Join(target, "x"), 10)
-	writeFile(t, filepath.Join(target, "y"), 20)
+	writeFile(t, filepath.Join(base, "target", "x"), 10)
+	writeFile(t, filepath.Join(base, "target", "y"), 20)
 	root := filepath.Join(base, "root")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Relative, so the link's length is a fixed 9 bytes rather than a multiple of 512.
+	target := filepath.Join("..", "target")
 	if err := os.Symlink(target, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,10 @@ func TestSymlinkNotFollowed(t *testing.T) {
 	if l.IsDir || l.Flags&scan.FlagSymlink == 0 || l.Children != nil {
 		t.Errorf("link = %+v, want non-dir with FlagSymlink and nil Children", l)
 	}
-	// The link's own Size depends on the file system, so only its length is pinned.
+	// The link's own allocation depends on the file system, so only its 512-byte granularity is pinned.
+	if l.Size%512 != 0 {
+		t.Errorf("link Size = %d, want a multiple of 512 (allocated blocks, not the link's length)", l.Size)
+	}
 	if l.Apparent != int64(len(target)) {
 		t.Errorf("link Apparent = %d, want len(target) = %d", l.Apparent, len(target))
 	}
