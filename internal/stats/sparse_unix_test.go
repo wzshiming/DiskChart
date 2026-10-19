@@ -99,3 +99,44 @@ func TestSubtreeSparseAggregate(t *testing.T) {
 		t.Errorf("Subtree(d, 1, 1, 0) has %d aggregates, want 1", n)
 	}
 }
+
+func TestSubtreeSelectsBySizeNotApparent(t *testing.T) {
+	const holeLen = 1 << 20
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "full"), 1)
+	p := filepath.Join(root, "sparse")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.Truncate(holeLen)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocks := fi.Sys().(*syscall.Stat_t).Blocks; blocks*512 >= holeLen {
+		t.Skipf("file system allocated %d blocks for a %d-byte hole", blocks, holeLen)
+	}
+	tree := scanOK(t, root)
+	hole := mustNode(t, tree, find(t, tree, "sparse"))
+
+	// Half the root by Size keeps full and merges the hole; half by Apparent would do the reverse.
+	v := mustSubtree(t, tree, tree.Root(), 1, 0, 0.5)
+	if v.Apparent != holeLen+unit {
+		t.Errorf("root Apparent = %d, want %d", v.Apparent, holeLen+unit)
+	}
+	agg := lastAggregate(t, "Subtree(root, 1, 0, 0.5)", v)
+	if kept := v.Children[:len(v.Children)-1]; len(kept) != 1 || kept[0].Name != "full" || kept[0].Size != unit {
+		t.Errorf("Subtree(root, 1, 0, 0.5) kept %+v, want only full with Size %d", kept, unit)
+	}
+	if agg.Count != 1 || agg.Apparent != holeLen || agg.Size != hole.Size {
+		t.Errorf("root aggregate Count/Apparent/Size = %d/%d/%d, want 1/%d/%d (the hole alone)", agg.Count, agg.Apparent, agg.Size, holeLen, hole.Size)
+	}
+	if page := mustChildren(t, tree, tree.Root(), int(agg.Skip), int(agg.Count)); len(page) != 1 || page[0].ID != hole.ID {
+		t.Errorf("Children(root, %d, %d) = %+v, want only the hole (ID %d)", agg.Skip, agg.Count, page, hole.ID)
+	}
+}
