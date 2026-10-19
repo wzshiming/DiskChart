@@ -6,6 +6,7 @@ export interface Item {
   id: number
   name: string
   size: number
+  apparent: number
   isDir: boolean
   fileCount: number
   modTime: number

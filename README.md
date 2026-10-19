@@ -11,6 +11,7 @@ Disk usage analyzer for macOS, Windows and Linux.
 - Scan a disk volume or any folder; cancel at any time
 - Does not cross filesystem boundaries (skips other mount points)
 - Hard links counted only once; symbolic links not followed
+- Sizes are on-disk usage (allocated blocks, like `du`), not apparent length; sparse, compressed and cloud-placeholder files count only what they occupy; the detail panel also shows the apparent size
 - Treemap / Sunburst charts with click-to-drill-down and breadcrumbs to navigate back
 - Top 100 largest files
 - Top 50 largest folders with dominance filtering: when ≥ 90% of a directory's size comes from a single subdirectory, only that subdirectory is listed
