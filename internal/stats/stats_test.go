@@ -105,7 +105,7 @@ func entry(t *testing.T, tree *scan.Tree, names ...string) stats.Entry {
 	t.Helper()
 	id := find(t, tree, names...)
 	n := mustNode(t, tree, id)
-	e := stats.Entry{ID: id, Name: n.Name, RelPath: filepath.Join(names...), Size: n.Size, IsDir: n.IsDir, ModTime: n.ModTime}
+	e := stats.Entry{ID: id, Name: n.Name, RelPath: filepath.Join(names...), Size: n.Size, Apparent: n.Apparent, IsDir: n.IsDir, ModTime: n.ModTime}
 	if n.IsDir {
 		e.FileCount = n.FileCount
 	}
@@ -277,7 +277,7 @@ func TestCategoryOf(t *testing.T) {
 func view(t *testing.T, tree *scan.Tree, id scan.ID) stats.View {
 	t.Helper()
 	n := mustNode(t, tree, id)
-	return stats.View{ID: n.ID, Name: n.Name, Size: n.Size, IsDir: n.IsDir, FileCount: n.FileCount}
+	return stats.View{ID: n.ID, Name: n.Name, Size: n.Size, Apparent: n.Apparent, IsDir: n.IsDir, FileCount: n.FileCount}
 }
 
 // checkView compares the node fields of got against want, ignoring Children.
@@ -287,16 +287,22 @@ func checkView(t *testing.T, where string, got, want stats.View) {
 		t.Errorf("%s = {ID:%d Name:%q Size:%d IsDir:%v Aggregate:%v}, want {ID:%d Name:%q Size:%d IsDir:%v Aggregate:%v}",
 			where, got.ID, got.Name, got.Size, got.IsDir, got.Aggregate, want.ID, want.Name, want.Size, want.IsDir, want.Aggregate)
 	}
+	if got.Apparent != want.Apparent {
+		t.Errorf("%s.Apparent = %d, want %d", where, got.Apparent, want.Apparent)
+	}
 	if want.IsDir && got.FileCount != want.FileCount {
 		t.Errorf("%s.FileCount = %d, want %d", where, got.FileCount, want.FileCount)
 	}
 }
 
-func checkAggregate(t *testing.T, where string, got stats.View, size, count, files int64) {
+func checkAggregate(t *testing.T, where string, got stats.View, size, apparent, count, files int64) {
 	t.Helper()
 	if got.ID != scan.None || !got.Aggregate || got.Size != size || got.Count != count || got.FileCount != files {
 		t.Errorf("%s = {ID:%d Aggregate:%v Size:%d Count:%d FileCount:%d}, want {ID:%d Aggregate:true Size:%d Count:%d FileCount:%d}",
 			where, got.ID, got.Aggregate, got.Size, got.Count, got.FileCount, scan.None, size, count, files)
+	}
+	if got.Apparent != apparent {
+		t.Errorf("%s.Apparent = %d, want %d", where, got.Apparent, apparent)
 	}
 }
 
@@ -321,7 +327,7 @@ func TestSubtreeAggregate(t *testing.T) {
 		checkView(t, fmt.Sprintf("Children[%d]", i), v.Children[i], view(t, tree, find(t, tree, name)))
 	}
 	// a 350 + docs 325 + r.txt 7 + empty 0 = 682; files 3+3+1+0 = 7.
-	checkAggregate(t, "Children[3]", v.Children[3], 682*unit, 4, 7)
+	checkAggregate(t, "Children[3]", v.Children[3], 682*unit, 682*unit, 4, 7)
 }
 
 func TestSubtreeMinFraction(t *testing.T) {
@@ -335,14 +341,14 @@ func TestSubtreeMinFraction(t *testing.T) {
 	x, b := v.Children[0], v.Children[1]
 	checkView(t, "x", x, view(t, tree, find(t, tree, "x")))
 	checkView(t, "b", b, view(t, tree, find(t, tree, "b")))
-	checkAggregate(t, "root aggregate", v.Children[2], 1182*unit, 5, 9) // files 2+3+3+1+0
+	checkAggregate(t, "root aggregate", v.Children[2], 1182*unit, 1182*unit, 5, 9) // files 2+3+3+1+0
 
 	// x threshold 501: keep y 5000; merge small.txt 10.
 	if len(x.Children) != 2 {
 		t.Fatalf("len(x.Children) = %d, want 2 (y, aggregate)", len(x.Children))
 	}
 	checkView(t, "x/y", x.Children[0], view(t, tree, find(t, tree, "x", "y")))
-	checkAggregate(t, "x aggregate", x.Children[1], 10*unit, 1, 1)
+	checkAggregate(t, "x aggregate", x.Children[1], 10*unit, 10*unit, 1, 1)
 	if len(x.Children[0].Children) != 0 {
 		t.Errorf("x/y at depth 2 has %d children, want 0", len(x.Children[0].Children))
 	}
@@ -404,9 +410,10 @@ func TestSubtreeConservation(t *testing.T) {
 			}
 			return
 		}
-		var sum, kept, merged int64
+		var sum, apparent, kept, merged int64
 		for i, c := range v.Children {
 			sum += c.Size
+			apparent += c.Apparent
 			if c.Aggregate {
 				if i != len(v.Children)-1 {
 					t.Errorf("%s: aggregate at index %d, want last", where, i)
@@ -420,10 +427,14 @@ func TestSubtreeConservation(t *testing.T) {
 		if sum != v.Size {
 			t.Errorf("%s: Σ children.Size = %d, want %d", where, sum, v.Size)
 		}
+		n := mustNode(t, tree, v.ID)
+		if apparent != v.Apparent || v.Apparent != n.Apparent {
+			t.Errorf("%s: Σ children.Apparent = %d, Apparent = %d, want both node Apparent %d", where, apparent, v.Apparent, n.Apparent)
+		}
 		if maxChildren > 0 && kept > int64(maxChildren) {
 			t.Errorf("%s: %d non-aggregate children, max %d", where, kept, maxChildren)
 		}
-		if n := mustNode(t, tree, v.ID); kept+merged != int64(len(n.Children)) {
+		if kept+merged != int64(len(n.Children)) {
 			t.Errorf("%s: kept %d + merged %d != %d node children", where, kept, merged, len(n.Children))
 		}
 	}
@@ -530,9 +541,11 @@ func checkChildrenMatch(t *testing.T, tree *scan.Tree, where string, v stats.Vie
 		if int64(len(merged)) != c.Count {
 			t.Errorf("%s: Children(Skip %d, Count %d) returned %d entries, want %d", where, c.Skip, c.Count, len(merged), c.Count)
 		}
-		var size, files int64
+		var size, apparent, nodeApparent, files int64
 		for _, e := range merged {
 			size += e.Size
+			apparent += e.Apparent
+			nodeApparent += mustNode(t, tree, e.ID).Apparent
 			if e.IsDir {
 				files += e.FileCount
 			} else {
@@ -544,6 +557,9 @@ func checkChildrenMatch(t *testing.T, tree *scan.Tree, where string, v stats.Vie
 		}
 		if size != c.Size || files != c.FileCount {
 			t.Errorf("%s: merged page Size %d FileCount %d, want aggregate Size %d FileCount %d", where, size, files, c.Size, c.FileCount)
+		}
+		if apparent != c.Apparent || c.Apparent != nodeApparent {
+			t.Errorf("%s: merged page Apparent %d, aggregate Apparent %d, want both Σ node Apparent %d", where, apparent, c.Apparent, nodeApparent)
 		}
 	}
 	all := entryIDs(mustChildren(t, tree, v.ID, 0, 1000))
@@ -568,7 +584,7 @@ func TestChildrenMatchesAggregate(t *testing.T) {
 func nodeEntry(t *testing.T, tree *scan.Tree, names ...string) stats.Entry {
 	t.Helper()
 	n := mustNode(t, tree, find(t, tree, names...))
-	return stats.Entry{ID: n.ID, Name: n.Name, RelPath: filepath.Join(names...), Size: n.Size, IsDir: n.IsDir, FileCount: n.FileCount, ModTime: n.ModTime}
+	return stats.Entry{ID: n.ID, Name: n.Name, RelPath: filepath.Join(names...), Size: n.Size, Apparent: n.Apparent, IsDir: n.IsDir, FileCount: n.FileCount, ModTime: n.ModTime}
 }
 
 func TestChildrenOrderAndRelPath(t *testing.T) {

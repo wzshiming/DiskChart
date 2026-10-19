@@ -514,6 +514,11 @@ func TestSubtreeRootSizeAndOrder(t *testing.T) {
 	if !slices.IsSortedFunc(v.Children, func(x, y View) int { return int(y.Size - x.Size) }) {
 		t.Fatalf("Subtree children not sorted by Size desc: %+v", v.Children)
 	}
+	for _, x := range append([]View{v}, v.Children...) {
+		if x.Apparent != x.Size {
+			t.Errorf("Subtree(root) view %q Apparent = %d, want Size %d", x.Name, x.Apparent, x.Size)
+		}
+	}
 }
 
 func TestSubtreeChildrenNeverNil(t *testing.T) {
@@ -586,8 +591,12 @@ func TestChildren(t *testing.T) {
 		t.Fatalf("Children(root, 0, 10) = %+v, want b, a, r.txt", es)
 	}
 	for i, w := range want {
-		if e := es[i]; e.Name != w.name || e.RelPath != w.name || e.Size != w.size || e.IsDir != w.isDir {
+		e := es[i]
+		if e.Name != w.name || e.RelPath != w.name || e.Size != w.size || e.IsDir != w.isDir {
 			t.Errorf("Children(root, 0, 10)[%d] = %+v, want Name/RelPath %q Size %d IsDir %v", i, e, w.name, w.size, w.isDir)
+		}
+		if e.Apparent != w.size {
+			t.Errorf("Children(root, 0, 10)[%d] %q Apparent = %d, want %d", i, e.Name, e.Apparent, w.size)
 		}
 	}
 
@@ -657,6 +666,9 @@ func TestTopFilesOrdered(t *testing.T) {
 	}
 	if es[0].Name != "f3" || es[0].Size != 1000*unit || es[1].Name != "f2" || es[1].Size != 200*unit {
 		t.Fatalf("TopFiles(2) = %+v, want f3(%d), f2(%d)", es, 1000*unit, 200*unit)
+	}
+	if es[0].Apparent != es[0].Size || es[1].Apparent != es[1].Size {
+		t.Errorf("TopFiles(2) Apparent = %d, %d, want Size %d, %d", es[0].Apparent, es[1].Apparent, es[0].Size, es[1].Size)
 	}
 }
 
@@ -765,6 +777,10 @@ func TestDeleteInvalidID(t *testing.T) {
 func TestDeleteFileUpdatesTree(t *testing.T) {
 	a, rt, root, st := scanDone(t, Deps{})
 	f := child(t, a, st.RootID, "r.txt")
+	before, err := a.Subtree(st.RootID, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("Subtree(root) before delete: %v", err)
+	}
 	res, err := a.Delete(f.ID)
 	if err != nil {
 		t.Fatalf("Delete(r.txt): %v", err)
@@ -781,6 +797,9 @@ func TestDeleteFileUpdatesTree(t *testing.T) {
 	v, err := a.Subtree(st.RootID, 1, 10, 0)
 	if err != nil || v.Size != st.Summary.Size-7*unit {
 		t.Fatalf("Subtree(root) Size = %d, %v, want %d", v.Size, err, st.Summary.Size-7*unit)
+	}
+	if v.Apparent != before.Apparent-7*unit {
+		t.Errorf("Subtree(root) Apparent = %d, want %d (%d before deleting r.txt)", v.Apparent, before.Apparent-7*unit, before.Apparent)
 	}
 	if _, err := a.NodePath(f.ID); !errors.Is(err, ErrInvalidID) {
 		t.Fatalf("NodePath(deleted) error = %v, want ErrInvalidID", err)
