@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/wzshiming/DiskChart/internal/scan"
@@ -27,14 +28,17 @@ func TestHardLinkCountedOnce(t *testing.T) {
 	if n1.Flags&scan.FlagHardLinkDup != 0 {
 		primary, dup = n2, n1
 	}
-	if primary.Size != 300 || primary.Flags&scan.FlagHardLinkDup != 0 {
-		t.Errorf("primary link %q = %+v, want Size 300 without FlagHardLinkDup", primary.Name, primary)
+	if primary.Size != 300*unit || primary.Flags&scan.FlagHardLinkDup != 0 {
+		t.Errorf("primary link %q = %+v, want Size %d without FlagHardLinkDup", primary.Name, primary, 300*unit)
 	}
 	if dup.Size != 0 || dup.Flags&scan.FlagHardLinkDup == 0 {
 		t.Errorf("duplicate link %q = %+v, want Size 0 with FlagHardLinkDup", dup.Name, dup)
 	}
-	if rn := mustNode(t, tree, tree.Root()); rn.Size != 300 {
-		t.Errorf("root Size = %d, want 300", rn.Size)
+	if primary.Apparent != 300*unit || dup.Apparent != 0 {
+		t.Errorf("Apparent of primary/duplicate link = %d/%d, want %d/0", primary.Apparent, dup.Apparent, 300*unit)
+	}
+	if rn := mustNode(t, tree, tree.Root()); rn.Size != 300*unit || rn.Apparent != 300*unit {
+		t.Errorf("root Size/Apparent = %d/%d, want %d/%d", rn.Size, rn.Apparent, 300*unit, 300*unit)
 	}
 }
 
@@ -57,6 +61,10 @@ func TestSymlinkNotFollowed(t *testing.T) {
 	if l.IsDir || l.Flags&scan.FlagSymlink == 0 || l.Children != nil {
 		t.Errorf("link = %+v, want non-dir with FlagSymlink and nil Children", l)
 	}
+	// The link's own Size depends on the file system, so only its length is pinned.
+	if l.Apparent != int64(len(target)) {
+		t.Errorf("link Apparent = %d, want len(target) = %d", l.Apparent, len(target))
+	}
 	if rn := mustNode(t, tree, tree.Root()); rn.FileCount != 1 || rn.DirCount != 0 {
 		t.Errorf("root FileCount/DirCount = %d/%d, want 1/0 (symlink target not followed)", rn.FileCount, rn.DirCount)
 	}
@@ -70,7 +78,7 @@ func TestRootSymlinkFollowed(t *testing.T) {
 	}
 	tree := scanOK(t, link, scan.Options{})
 	checkInvariants(t, tree)
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1357, 5, 4)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1357*unit, 1357*unit, 5, 4)
 }
 
 func TestPermissionErrorRecorded(t *testing.T) {
@@ -104,15 +112,38 @@ func TestPermissionErrorRecorded(t *testing.T) {
 		t.Errorf("Errors() = %+v, want an entry for %q", tree.Errors(), subPath)
 	}
 
-	if b := mustNode(t, tree, find(t, tree, "b")); b.Size != 1000 {
-		t.Errorf("b Size = %d, want 1000", b.Size)
+	if b := mustNode(t, tree, find(t, tree, "b")); b.Size != 1000*unit {
+		t.Errorf("b Size = %d, want %d", b.Size, 1000*unit)
 	}
-	if f2 := mustNode(t, tree, find(t, tree, "a", "f2")); f2.Size != 200 {
-		t.Errorf("a/f2 Size = %d, want 200", f2.Size)
+	if f2 := mustNode(t, tree, find(t, tree, "a", "f2")); f2.Size != 200*unit {
+		t.Errorf("a/f2 Size = %d, want %d", f2.Size, 200*unit)
 	}
 
 	_, last := rec.snapshot()
 	if last.Errors != int64(len(tree.Errors())) {
 		t.Errorf("last Progress.Errors = %d, want len(Errors()) = %d", last.Errors, len(tree.Errors()))
 	}
+}
+
+func TestSparseFileAllocation(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "d", "f"), 1)
+	p := filepath.Join(root, "d", "sparse")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.Truncate(sparseLen)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocks := fi.Sys().(*syscall.Stat_t).Blocks; blocks*512 >= sparseLen {
+		t.Skipf("file system allocated %d blocks for a %d-byte hole", blocks, sparseLen)
+	}
+	assertSparseFixture(t, root)
 }

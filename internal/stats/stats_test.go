@@ -3,6 +3,7 @@ package stats_test
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,17 +13,23 @@ import (
 	"github.com/wzshiming/DiskChart/internal/stats"
 )
 
+// unit is one 4 KiB block: whole units of random data occupy exactly their length on APFS, ext4 and NTFS.
+const unit = 4096
+
+// writeFile writes size units of fixed-seed random bytes, which no file system can compress.
 func writeFile(t *testing.T, p string, size int) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+	b := make([]byte, size*unit)
+	rand.NewChaCha8([32]byte{}).Read(b)
+	if err := os.WriteFile(p, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// fixture builds (sizes in bytes, total 7192):
+// fixture builds (sizes in units, total 7192):
 //
 //	a/f1=100 a/f2=200 a/sub/f3=50          a=350 sub=50
 //	b/f4=1000                              b=1000
@@ -207,11 +214,11 @@ func ext(e string, size, count int64) stats.ExtStat {
 // Per extension: bin 5000/1; "" = f1+f2+f3+f4+.hidden+noext = 1375/6;
 // jpg = 400+100 = 500/2; pdf 300/1; txt = 7+10 = 17/2.
 var allExts = []stats.ExtStat{
-	ext("bin", 5000, 1),
-	ext("", 1375, 6),
-	ext("jpg", 500, 2),
-	ext("pdf", 300, 1),
-	ext("txt", 17, 2),
+	ext("bin", 5000*unit, 1),
+	ext("", 1375*unit, 6),
+	ext("jpg", 500*unit, 2),
+	ext("pdf", 300*unit, 1),
+	ext("txt", 17*unit, 2),
 }
 
 func TestByExtension(t *testing.T) {
@@ -222,12 +229,12 @@ func TestByExtension(t *testing.T) {
 		t.Errorf("ByExtension(2).Items:\n got  %+v\n want %+v", got.Items, allExts[:2])
 	}
 	// Other = jpg+pdf+txt = 500+300+17 = 817, Count 2+1+2 = 5.
-	wantOther := stats.ExtStat{Ext: "", Category: "other", Size: 817, Count: 5}
+	wantOther := stats.ExtStat{Ext: "", Category: "other", Size: 817 * unit, Count: 5}
 	if got.Other != wantOther {
 		t.Errorf("ByExtension(2).Other = %+v, want %+v", got.Other, wantOther)
 	}
-	if got.Total != 7192 {
-		t.Errorf("ByExtension(2).Total = %d, want 7192", got.Total)
+	if got.Total != 7192*unit {
+		t.Errorf("ByExtension(2).Total = %d, want %d", got.Total, 7192*unit)
 	}
 }
 
@@ -241,8 +248,8 @@ func TestByExtensionAll(t *testing.T) {
 		if want := (stats.ExtStat{Ext: "", Category: "other"}); got.Other != want {
 			t.Errorf("ByExtension(%d).Other = %+v, want %+v", k, got.Other, want)
 		}
-		if got.Total != 7192 {
-			t.Errorf("ByExtension(%d).Total = %d, want 7192", k, got.Total)
+		if got.Total != 7192*unit {
+			t.Errorf("ByExtension(%d).Total = %d, want %d", k, got.Total, 7192*unit)
 		}
 	}
 }
@@ -314,7 +321,7 @@ func TestSubtreeAggregate(t *testing.T) {
 		checkView(t, fmt.Sprintf("Children[%d]", i), v.Children[i], view(t, tree, find(t, tree, name)))
 	}
 	// a 350 + docs 325 + r.txt 7 + empty 0 = 682; files 3+3+1+0 = 7.
-	checkAggregate(t, "Children[3]", v.Children[3], 682, 4, 7)
+	checkAggregate(t, "Children[3]", v.Children[3], 682*unit, 4, 7)
 }
 
 func TestSubtreeMinFraction(t *testing.T) {
@@ -328,14 +335,14 @@ func TestSubtreeMinFraction(t *testing.T) {
 	x, b := v.Children[0], v.Children[1]
 	checkView(t, "x", x, view(t, tree, find(t, tree, "x")))
 	checkView(t, "b", b, view(t, tree, find(t, tree, "b")))
-	checkAggregate(t, "root aggregate", v.Children[2], 1182, 5, 9) // files 2+3+3+1+0
+	checkAggregate(t, "root aggregate", v.Children[2], 1182*unit, 5, 9) // files 2+3+3+1+0
 
 	// x threshold 501: keep y 5000; merge small.txt 10.
 	if len(x.Children) != 2 {
 		t.Fatalf("len(x.Children) = %d, want 2 (y, aggregate)", len(x.Children))
 	}
 	checkView(t, "x/y", x.Children[0], view(t, tree, find(t, tree, "x", "y")))
-	checkAggregate(t, "x aggregate", x.Children[1], 10, 1, 1)
+	checkAggregate(t, "x aggregate", x.Children[1], 10*unit, 1, 1)
 	if len(x.Children[0].Children) != 0 {
 		t.Errorf("x/y at depth 2 has %d children, want 0", len(x.Children[0].Children))
 	}
