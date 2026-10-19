@@ -20,6 +20,7 @@ type node struct {
 	name      string
 	children  []ID
 	size      int64
+	apparent  int64
 	fileCount int64
 	dirCount  int64
 	modTime   int64
@@ -36,6 +37,7 @@ func (t *Tree) finish() {
 		c := &n[i]
 		p := &n[c.parent]
 		p.size += c.size
+		p.apparent += c.apparent
 		if c.isDir {
 			p.fileCount += c.fileCount
 			p.dirCount += 1 + c.dirCount
@@ -91,6 +93,7 @@ func (t *Tree) Node(id ID) (Node, bool) {
 		Name:      n.name,
 		IsDir:     n.isDir,
 		Size:      n.size,
+		Apparent:  n.apparent,
 		FileCount: n.fileCount,
 		DirCount:  n.dirCount,
 		ModTime:   n.modTime,
@@ -132,7 +135,7 @@ func (t *Tree) Remove(id ID) (parent ID, err error) {
 		return None, ErrRoot
 	}
 	n := &t.nodes[id]
-	size, files, dirs := n.size, int64(1), int64(0)
+	size, apparent, files, dirs := n.size, n.apparent, int64(1), int64(0)
 	if n.isDir {
 		files, dirs = n.fileCount, 1+n.dirCount
 	}
@@ -162,6 +165,7 @@ func (t *Tree) Remove(id ID) (parent ID, err error) {
 	for a := parent; a != None; a = t.nodes[a].parent {
 		an := &t.nodes[a]
 		an.size -= size
+		an.apparent -= apparent
 		an.fileCount -= files
 		an.dirCount -= dirs
 		if g := an.parent; g != None {

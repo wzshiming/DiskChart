@@ -22,10 +22,10 @@ const None ID = -1
 type Flags uint8
 
 const (
-	FlagHardLinkDup Flags = 1 << iota // regular file whose (dev,ino) was already counted; Size 0
-	FlagSymlink                       // symbolic link, not followed; Size is the Lstat size
-	FlagMountPoint                    // directory listed in ExcludeMountpoints, not entered; Size 0
-	FlagReparse                       // (windows) directory with a reparse point, not entered; Size 0
+	FlagHardLinkDup Flags = 1 << iota // regular file whose (dev,ino) was already counted; Size and Apparent 0
+	FlagSymlink                       // symbolic link, not followed; Size is the link's own allocation, Apparent its Lstat size
+	FlagMountPoint                    // directory listed in ExcludeMountpoints, not entered; Size and Apparent 0
+	FlagReparse                       // (windows) directory with a reparse point, not entered; Size and Apparent 0
 	FlagReadError                     // ReadDir or Lstat failed for this entry; see Tree.Errors
 )
 
@@ -51,7 +51,8 @@ type Node struct {
 	Parent    ID     // None for the root
 	Name      string // base name; the root holds its cleaned absolute path
 	IsDir     bool
-	Size      int64 // apparent bytes; for directories the sum of the children's Size
+	Size      int64 // bytes allocated on disk; for directories the sum of the children's Size, excluding the directory's own blocks
+	Apparent  int64 // length reported by Lstat; for directories the sum of the children's Apparent
 	FileCount int64 // descendant non-directory nodes (recursive)
 	DirCount  int64 // descendant directories (recursive, excluding itself)
 	ModTime   int64 // unix seconds (Lstat)
@@ -73,14 +74,15 @@ type job struct {
 }
 
 type entry struct {
-	name    string
-	path    string // set only for directories to enter
-	size    int64
-	modTime int64
-	key     fileKey
-	hasKey  bool
-	isDir   bool
-	flags   Flags
+	name     string
+	path     string // set only for directories to enter
+	size     int64
+	apparent int64
+	modTime  int64
+	key      fileKey
+	hasKey   bool
+	isDir    bool
+	flags    Flags
 }
 
 type scanner struct {
@@ -254,7 +256,8 @@ func (s *scanner) readDir(j job) {
 		switch {
 		case mode&fs.ModeSymlink != 0:
 			e.flags = FlagSymlink
-			e.size = info.Size()
+			e.size = allocatedSize(filepath.Join(j.path, name), info)
+			e.apparent = info.Size()
 		case isReparseDir(info):
 			e.isDir = true
 			e.flags = FlagReparse
@@ -267,7 +270,8 @@ func (s *scanner) readDir(j job) {
 				e.path = p
 			}
 		default:
-			e.size = info.Size()
+			e.size = allocatedSize(filepath.Join(j.path, name), info)
+			e.apparent = info.Size()
 			e.key, e.hasKey = hardLinkKey(info)
 		}
 		items = append(items, e)
@@ -288,7 +292,7 @@ func (s *scanner) readDir(j job) {
 		if e.hasKey {
 			if _, dup := s.seen[e.key]; dup {
 				e.flags |= FlagHardLinkDup
-				e.size = 0
+				e.size, e.apparent = 0, 0
 			} else {
 				if s.seen == nil {
 					s.seen = make(map[fileKey]struct{})
@@ -297,12 +301,13 @@ func (s *scanner) readDir(j job) {
 			}
 		}
 		t.nodes = append(t.nodes, node{
-			name:    e.name,
-			parent:  j.id,
-			isDir:   e.isDir,
-			size:    e.size,
-			modTime: e.modTime,
-			flags:   e.flags,
+			name:     e.name,
+			parent:   j.id,
+			isDir:    e.isDir,
+			size:     e.size,
+			apparent: e.apparent,
+			modTime:  e.modTime,
+			flags:    e.flags,
 		})
 		children = append(children, id)
 		if e.isDir {
