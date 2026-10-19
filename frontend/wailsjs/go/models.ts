@@ -37,6 +37,7 @@ export namespace app {
 	    Name: string;
 	    RelPath: string;
 	    Size: number;
+	    Apparent: number;
 	    IsDir: boolean;
 	    FileCount: number;
 	    ModTime: number;
@@ -51,6 +52,7 @@ export namespace app {
 	        this.Name = source["Name"];
 	        this.RelPath = source["RelPath"];
 	        this.Size = source["Size"];
+	        this.Apparent = source["Apparent"];
 	        this.IsDir = source["IsDir"];
 	        this.FileCount = source["FileCount"];
 	        this.ModTime = source["ModTime"];
@@ -327,6 +329,7 @@ export namespace app {
 	    ID: number;
 	    Name: string;
 	    Size: number;
+	    Apparent: number;
 	    IsDir: boolean;
 	    FileCount: number;
 	    Aggregate: boolean;
@@ -343,6 +346,7 @@ export namespace app {
 	        this.ID = source["ID"];
 	        this.Name = source["Name"];
 	        this.Size = source["Size"];
+	        this.Apparent = source["Apparent"];
 	        this.IsDir = source["IsDir"];
 	        this.FileCount = source["FileCount"];
 	        this.Aggregate = source["Aggregate"];

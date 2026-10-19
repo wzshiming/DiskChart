@@ -19,6 +19,7 @@ type Entry struct {
 	Name      string
 	RelPath   string // filepath.Rel(root path, node path)
 	Size      int64
+	Apparent  int64 // apparent bytes (Lstat length); for directories the sum of the children's
 	IsDir     bool
 	FileCount int64
 	ModTime   int64
@@ -29,6 +30,7 @@ type View struct {
 	ID        scan.ID // scan.None for the aggregate pseudo-node
 	Name      string
 	Size      int64
+	Apparent  int64 // apparent bytes (Lstat length); for directories the sum of the children's
 	IsDir     bool
 	FileCount int64
 	Aggregate bool
@@ -174,6 +176,7 @@ func top(t *scan.Tree, cs []cand, n int) []Entry {
 			Name:      x.Name,
 			RelPath:   r.rel,
 			Size:      x.Size,
+			Apparent:  x.Apparent,
 			IsDir:     x.IsDir,
 			FileCount: x.FileCount,
 			ModTime:   x.ModTime,
@@ -234,7 +237,7 @@ func Subtree(t *scan.Tree, id scan.ID, depth, maxChildren int, minFraction float
 }
 
 func subtree(t *scan.Tree, n scan.Node, depth, maxChildren int, minFraction float64) View {
-	v := View{ID: n.ID, Name: n.Name, Size: n.Size, IsDir: n.IsDir, FileCount: n.FileCount}
+	v := View{ID: n.ID, Name: n.Name, Size: n.Size, Apparent: n.Apparent, IsDir: n.IsDir, FileCount: n.FileCount}
 	if depth <= 0 || !n.IsDir {
 		return v
 	}
@@ -252,6 +255,7 @@ func subtree(t *scan.Tree, n scan.Node, depth, maxChildren int, minFraction floa
 			continue
 		}
 		agg.Size += c.Size
+		agg.Apparent += c.Apparent
 		agg.Count++
 		if c.IsDir {
 			agg.FileCount += c.FileCount
@@ -295,6 +299,7 @@ func Children(t *scan.Tree, id scan.ID, offset, limit int) ([]Entry, bool) {
 			Name:      c.Name,
 			RelPath:   joinRel(prel, c.Name),
 			Size:      c.Size,
+			Apparent:  c.Apparent,
 			IsDir:     c.IsDir,
 			FileCount: c.FileCount,
 			ModTime:   c.ModTime,
