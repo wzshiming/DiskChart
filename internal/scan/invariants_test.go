@@ -42,7 +42,7 @@ func checkInvariants(t *testing.T, tree *scan.Tree) {
 			return
 		}
 
-		var size, files, dirs int64
+		var size, apparent, files, dirs int64
 		var prev scan.Node
 		for i, cid := range n.Children {
 			c, ok := tree.Node(cid)
@@ -57,6 +57,7 @@ func checkInvariants(t *testing.T, tree *scan.Tree) {
 				t.Errorf("Path(child) = %q, want %q", got, want)
 			}
 			size += c.Size
+			apparent += c.Apparent
 			if c.IsDir {
 				files += c.FileCount
 				dirs += 1 + c.DirCount
@@ -71,6 +72,9 @@ func checkInvariants(t *testing.T, tree *scan.Tree) {
 		}
 		if n.Size != size {
 			t.Errorf("%q Size = %d, want sum of children %d", p, n.Size, size)
+		}
+		if n.Apparent != apparent {
+			t.Errorf("%q Apparent = %d, want sum of children %d", p, n.Apparent, apparent)
 		}
 		if n.FileCount != files {
 			t.Errorf("%q FileCount = %d, want %d", p, n.FileCount, files)
