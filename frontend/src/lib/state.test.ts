@@ -31,7 +31,7 @@ const results: UiState = {
 
 const scanning: UiState = { ...initialState, phase: 'scanning', root: '/r', status: 'scanning', revision: 2 }
 
-const item: Item = { id: 7, name: 'f.txt', size: 10, isDir: false, fileCount: 0, modTime: 1 }
+const item: Item = { id: 7, name: 'f.txt', size: 10, apparent: 21, isDir: false, fileCount: 0, modTime: 1 }
 
 function run(s: UiState, e: UiEvent): UiState {
   const before = structuredClone(s)
