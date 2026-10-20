@@ -53,8 +53,10 @@
     <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
       <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.path')}</dt>
       <dd class="font-mono break-all">{path}</dd>
-      <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.size')}</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.sizeOnDisk')}</dt>
       <dd class="tabular-nums">{formatBytes(item.size, getUnit())}</dd>
+      <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.apparentSize')}</dt>
+      <dd class="tabular-nums">{formatBytes(item.apparent, getUnit())}</dd>
       {#if item.isDir}
         <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.files')}</dt>
         <dd class="tabular-nums">{formatCount(item.fileCount, getLocale())}</dd>

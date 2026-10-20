@@ -92,6 +92,7 @@
       id: view.ID,
       name: view.ID === ui.rootID ? baseName(view.Name) : view.Name,
       size: view.Size,
+      apparent: view.Apparent,
       isDir: true,
       fileCount: view.FileCount,
       modTime: 0,
@@ -113,11 +114,27 @@
 
   function selectFile(d: TreemapDatum) {
     const entry = topFiles?.find((e) => e.ID === d.id)
-    onSelect({ id: d.id, name: d.name, size: d.value, isDir: false, fileCount: 0, modTime: entry?.ModTime ?? 0 })
+    onSelect({
+      id: d.id,
+      name: d.name,
+      size: d.value,
+      apparent: d.apparent,
+      isDir: false,
+      fileCount: 0,
+      modTime: entry?.ModTime ?? 0,
+    })
   }
 
   function pickFile(e: app.Entry) {
-    const item: Item = { id: e.ID, name: e.Name, size: e.Size, isDir: false, fileCount: 0, modTime: e.ModTime }
+    const item: Item = {
+      id: e.ID,
+      name: e.Name,
+      size: e.Size,
+      apparent: e.Apparent,
+      isDir: false,
+      fileCount: 0,
+      modTime: e.ModTime,
+    }
     onSelect(item)
     api.crumbs(e.ID)
       .then((c) => {

@@ -3,6 +3,7 @@ import type { app } from '../../wailsjs/go/models'
 export interface TreemapDatum {
   name: string
   value: number
+  apparent: number
   id: number
   parentID: number
   isDir: boolean
@@ -19,6 +20,7 @@ export function toTreemapData(view: app.View, aggregateLabel: (count: number) =>
       return {
         name: aggregateLabel(c.Count),
         value: c.Size,
+        apparent: c.Apparent,
         id: -1,
         parentID: view.ID,
         isDir: false,
@@ -31,6 +33,7 @@ export function toTreemapData(view: app.View, aggregateLabel: (count: number) =>
     const datum: TreemapDatum = {
       name: c.Name,
       value: c.Size,
+      apparent: c.Apparent,
       id: c.ID,
       parentID: view.ID,
       isDir: c.IsDir,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,17 +17,23 @@ import (
 	"github.com/wzshiming/DiskChart/internal/volumes"
 )
 
+// unit is one 4 KiB block: whole units of random data occupy exactly their length on APFS, ext4 and NTFS.
+const unit = 4096
+
+// writeFile writes size units of fixed-seed random bytes, which no file system can compress.
 func writeFile(t *testing.T, p string, size int) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+	b := make([]byte, size*unit)
+	rand.NewChaCha8([32]byte{}).Read(b)
+	if err := os.WriteFile(p, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// fixture: a/f1=100 a/f2=200 b/f3=1000 r.txt=7 (Size 1307, FileCount 4, DirCount 2)
+// fixture, sizes in units: a/f1=100 a/f2=200 b/f3=1000 r.txt=7 (Size 1307, FileCount 4, DirCount 2)
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -257,8 +264,8 @@ func TestScanDoneStateAndSummary(t *testing.T) {
 		t.Fatalf("State = %+v, want RootID >= 0 and no Error", st)
 	}
 	s := st.Summary
-	if s.Size != 1307 || s.Files != 4 || s.Dirs != 3 || s.Errors != 0 || s.DurationMs < 0 {
-		t.Fatalf("Summary = %+v, want Size 1307, Files 4, Dirs 3 (incl. root), Errors 0, DurationMs >= 0", s)
+	if s.Size != 1307*unit || s.Files != 4 || s.Dirs != 3 || s.Errors != 0 || s.DurationMs < 0 {
+		t.Fatalf("Summary = %+v, want Size %d, Files 4, Dirs 3 (incl. root), Errors 0, DurationMs >= 0", s, 1307*unit)
 	}
 }
 
@@ -507,6 +514,11 @@ func TestSubtreeRootSizeAndOrder(t *testing.T) {
 	if !slices.IsSortedFunc(v.Children, func(x, y View) int { return int(y.Size - x.Size) }) {
 		t.Fatalf("Subtree children not sorted by Size desc: %+v", v.Children)
 	}
+	for _, x := range append([]View{v}, v.Children...) {
+		if x.Apparent != x.Size {
+			t.Errorf("Subtree(root) view %q Apparent = %d, want Size %d", x.Name, x.Apparent, x.Size)
+		}
+	}
 }
 
 func TestSubtreeChildrenNeverNil(t *testing.T) {
@@ -574,13 +586,17 @@ func TestChildren(t *testing.T) {
 		name  string
 		size  int64
 		isDir bool
-	}{{"b", 1000, true}, {"a", 300, true}, {"r.txt", 7, false}}
+	}{{"b", 1000 * unit, true}, {"a", 300 * unit, true}, {"r.txt", 7 * unit, false}}
 	if len(es) != len(want) {
 		t.Fatalf("Children(root, 0, 10) = %+v, want b, a, r.txt", es)
 	}
 	for i, w := range want {
-		if e := es[i]; e.Name != w.name || e.RelPath != w.name || e.Size != w.size || e.IsDir != w.isDir {
+		e := es[i]
+		if e.Name != w.name || e.RelPath != w.name || e.Size != w.size || e.IsDir != w.isDir {
 			t.Errorf("Children(root, 0, 10)[%d] = %+v, want Name/RelPath %q Size %d IsDir %v", i, e, w.name, w.size, w.isDir)
+		}
+		if e.Apparent != w.size {
+			t.Errorf("Children(root, 0, 10)[%d] %q Apparent = %d, want %d", i, e.Name, e.Apparent, w.size)
 		}
 	}
 
@@ -648,8 +664,11 @@ func TestTopFilesOrdered(t *testing.T) {
 	if err != nil || len(es) != 2 {
 		t.Fatalf("TopFiles(2) = %+v, %v, want 2 entries", es, err)
 	}
-	if es[0].Name != "f3" || es[0].Size != 1000 || es[1].Name != "f2" || es[1].Size != 200 {
-		t.Fatalf("TopFiles(2) = %+v, want f3(1000), f2(200)", es)
+	if es[0].Name != "f3" || es[0].Size != 1000*unit || es[1].Name != "f2" || es[1].Size != 200*unit {
+		t.Fatalf("TopFiles(2) = %+v, want f3(%d), f2(%d)", es, 1000*unit, 200*unit)
+	}
+	if es[0].Apparent != es[0].Size || es[1].Apparent != es[1].Size {
+		t.Errorf("TopFiles(2) Apparent = %d, %d, want Size %d, %d", es[0].Apparent, es[1].Apparent, es[0].Size, es[1].Size)
 	}
 }
 
@@ -758,11 +777,15 @@ func TestDeleteInvalidID(t *testing.T) {
 func TestDeleteFileUpdatesTree(t *testing.T) {
 	a, rt, root, st := scanDone(t, Deps{})
 	f := child(t, a, st.RootID, "r.txt")
+	before, err := a.Subtree(st.RootID, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("Subtree(root) before delete: %v", err)
+	}
 	res, err := a.Delete(f.ID)
 	if err != nil {
 		t.Fatalf("Delete(r.txt): %v", err)
 	}
-	if want := (DeleteResult{ParentID: st.RootID, RemovedSize: 7, RemovedFiles: 1}); res != want {
+	if want := (DeleteResult{ParentID: st.RootID, RemovedSize: 7 * unit, RemovedFiles: 1}); res != want {
 		t.Fatalf("DeleteResult = %+v, want %+v", res, want)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "r.txt")); !os.IsNotExist(err) {
@@ -772,8 +795,11 @@ func TestDeleteFileUpdatesTree(t *testing.T) {
 		t.Fatalf("Summary changed after delete: %+v, want %+v", got, st.Summary)
 	}
 	v, err := a.Subtree(st.RootID, 1, 10, 0)
-	if err != nil || v.Size != st.Summary.Size-7 {
-		t.Fatalf("Subtree(root) Size = %d, %v, want %d", v.Size, err, st.Summary.Size-7)
+	if err != nil || v.Size != st.Summary.Size-7*unit {
+		t.Fatalf("Subtree(root) Size = %d, %v, want %d", v.Size, err, st.Summary.Size-7*unit)
+	}
+	if v.Apparent != before.Apparent-7*unit {
+		t.Errorf("Subtree(root) Apparent = %d, want %d (%d before deleting r.txt)", v.Apparent, before.Apparent-7*unit, before.Apparent)
 	}
 	if _, err := a.NodePath(f.ID); !errors.Is(err, ErrInvalidID) {
 		t.Fatalf("NodePath(deleted) error = %v, want ErrInvalidID", err)
@@ -795,7 +821,7 @@ func TestDeleteDirCountsDescendants(t *testing.T) {
 		t.Fatalf("Delete(a): %v", err)
 	}
 	// a has no subdirectories, so DirCount+1 == 1.
-	want := DeleteResult{ParentID: st.RootID, RemovedSize: 300, RemovedFiles: d.FileCount, RemovedDirs: 1}
+	want := DeleteResult{ParentID: st.RootID, RemovedSize: 300 * unit, RemovedFiles: d.FileCount, RemovedDirs: 1}
 	if res != want || d.FileCount != 2 {
 		t.Fatalf("DeleteResult = %+v (FileCount %d), want %+v", res, d.FileCount, want)
 	}

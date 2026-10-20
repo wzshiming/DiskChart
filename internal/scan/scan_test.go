@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,17 +16,23 @@ import (
 	"github.com/wzshiming/DiskChart/internal/scan"
 )
 
+// unit is one 4 KiB block: whole units of random data occupy exactly their length on APFS, ext4 and NTFS.
+const unit = 4096
+
+// writeFile writes size units of fixed-seed random bytes, which no file system can compress.
 func writeFile(t *testing.T, p string, size int) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+	b := make([]byte, size*unit)
+	rand.NewChaCha8([32]byte{}).Read(b)
+	if err := os.WriteFile(p, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// fixture: a/f1=100 a/f2=200 a/sub/f3=50 b/f4=1000 empty/ r.txt=7
+// fixture, sizes in units: a/f1=100 a/f2=200 a/sub/f3=50 b/f4=1000 empty/ r.txt=7
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -91,11 +97,14 @@ func childNames(t *testing.T, tree *scan.Tree, id scan.ID) []string {
 	return names
 }
 
-func assertCounts(t *testing.T, label string, n scan.Node, size, files, dirs int64) {
+func assertCounts(t *testing.T, label string, n scan.Node, size, apparent, files, dirs int64) {
 	t.Helper()
 	if n.Size != size || n.FileCount != files || n.DirCount != dirs {
 		t.Errorf("%s: Size/FileCount/DirCount = %d/%d/%d, want %d/%d/%d",
 			label, n.Size, n.FileCount, n.DirCount, size, files, dirs)
+	}
+	if n.Apparent != apparent {
+		t.Errorf("%s: Apparent = %d, want %d", label, n.Apparent, apparent)
 	}
 }
 
@@ -105,7 +114,7 @@ func TestScanFixtureAggregates(t *testing.T) {
 	checkInvariants(t, tree)
 
 	rn := mustNode(t, tree, tree.Root())
-	assertCounts(t, "root", rn, 1357, 5, 4)
+	assertCounts(t, "root", rn, 1357*unit, 1357*unit, 5, 4)
 	if !rn.IsDir {
 		t.Error("root IsDir = false")
 	}
@@ -117,7 +126,7 @@ func TestScanFixtureAggregates(t *testing.T) {
 		t.Errorf("root Name = %q, want %q", rn.Name, want)
 	}
 
-	assertCounts(t, "a", mustNode(t, tree, find(t, tree, "a")), 350, 3, 1)
+	assertCounts(t, "a", mustNode(t, tree, find(t, tree, "a")), 350*unit, 350*unit, 3, 1)
 
 	if got, want := childNames(t, tree, tree.Root()), []string{"b", "a", "r.txt", "empty"}; !slices.Equal(got, want) {
 		t.Errorf("root Children names = %v, want %v", got, want)
@@ -127,8 +136,8 @@ func TestScanFixtureAggregates(t *testing.T) {
 	if got, want := tree.Path(f3), filepath.Join(root, "a", "sub", "f3"); got != want {
 		t.Errorf("Path(f3) = %q, want %q", got, want)
 	}
-	if n := mustNode(t, tree, f3); n.IsDir || n.Size != 50 || n.Children != nil {
-		t.Errorf("f3 = %+v, want file of Size 50 with nil Children", n)
+	if n := mustNode(t, tree, f3); n.IsDir || n.Size != 50*unit || n.Children != nil {
+		t.Errorf("f3 = %+v, want file of Size %d with nil Children", n, 50*unit)
 	}
 }
 
@@ -185,10 +194,10 @@ func TestMountPointExcludedWhenSameDevice(t *testing.T) {
 	checkInvariants(t, tree)
 
 	b := mustNode(t, tree, find(t, tree, "b"))
-	if !b.IsDir || b.Flags&scan.FlagMountPoint == 0 || b.Size != 0 || len(b.Children) != 0 {
-		t.Errorf("b = %+v, want IsDir, FlagMountPoint, Size 0, no Children", b)
+	if !b.IsDir || b.Flags&scan.FlagMountPoint == 0 || b.Size != 0 || b.Apparent != 0 || len(b.Children) != 0 {
+		t.Errorf("b = %+v, want IsDir, FlagMountPoint, Size and Apparent 0, no Children", b)
 	}
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 357, 4, 4)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 357*unit, 357*unit, 4, 4)
 }
 
 func TestMountPointEnteredWhenNotSameDevice(t *testing.T) {
@@ -200,10 +209,10 @@ func TestMountPointEnteredWhenNotSameDevice(t *testing.T) {
 	checkInvariants(t, tree)
 
 	b := mustNode(t, tree, find(t, tree, "b"))
-	if b.Flags&scan.FlagMountPoint != 0 || b.Size != 1000 || len(b.Children) != 1 {
-		t.Errorf("b = %+v, want entered normally with Size 1000", b)
+	if b.Flags&scan.FlagMountPoint != 0 || b.Size != 1000*unit || len(b.Children) != 1 {
+		t.Errorf("b = %+v, want entered normally with Size %d", b, 1000*unit)
 	}
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1357, 5, 4)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1357*unit, 1357*unit, 5, 4)
 }
 
 // progressRecorder detects concurrent callbacks via TryLock and keeps the last report.
@@ -336,8 +345,8 @@ func TestRemoveUpdatesAncestors(t *testing.T) {
 	if parent != a {
 		t.Errorf("Remove(a/sub) parent = %d, want a=%d", parent, a)
 	}
-	assertCounts(t, "a", mustNode(t, tree, a), 300, 2, 0)
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1307, 4, 3)
+	assertCounts(t, "a", mustNode(t, tree, a), 300*unit, 300*unit, 2, 0)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 1307*unit, 1307*unit, 4, 3)
 	if _, ok := tree.Node(sub); ok {
 		t.Error("Node(sub) ok after Remove")
 	}
@@ -366,7 +375,7 @@ func TestRemoveUpdatesAncestors(t *testing.T) {
 	if got, want := childNames(t, tree, tree.Root()), []string{"a", "empty"}; !slices.Equal(got, want) {
 		t.Errorf("root Children after Remove(r.txt) = %v, want %v", got, want)
 	}
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 300, 2, 2)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), 300*unit, 300*unit, 2, 2)
 }
 
 func TestRemoveFileReturnsParent(t *testing.T) {
@@ -377,7 +386,7 @@ func TestRemoveFileReturnsParent(t *testing.T) {
 	if err != nil || parent != a {
 		t.Errorf("Remove(a/f1) = %d, %v; want a=%d, nil", parent, err, a)
 	}
-	assertCounts(t, "a", mustNode(t, tree, a), 250, 2, 1)
+	assertCounts(t, "a", mustNode(t, tree, a), 250*unit, 250*unit, 2, 1)
 	checkInvariants(t, tree)
 }
 
@@ -399,7 +408,7 @@ func TestRemoveInvalidID(t *testing.T) {
 }
 
 func TestRandomTreeInvariants(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
+	rng := rand.New(rand.NewPCG(1, 2))
 	root := t.TempDir()
 	type dir struct {
 		p     string
@@ -407,7 +416,7 @@ func TestRandomTreeInvariants(t *testing.T) {
 	}
 	dirs := []dir{{root, 0}}
 	for i := 0; i < 40; {
-		parent := dirs[rng.Intn(len(dirs))]
+		parent := dirs[rng.IntN(len(dirs))]
 		if parent.depth >= 3 {
 			continue
 		}
@@ -420,9 +429,9 @@ func TestRandomTreeInvariants(t *testing.T) {
 	}
 	var total int64
 	for i := range 200 {
-		size := rng.Intn(5001)
-		total += int64(size)
-		writeFile(t, filepath.Join(dirs[rng.Intn(len(dirs))].p, fmt.Sprintf("f%d", i)), size)
+		size := rng.IntN(9)
+		total += int64(size) * unit
+		writeFile(t, filepath.Join(dirs[rng.IntN(len(dirs))].p, fmt.Sprintf("f%d", i)), size)
 	}
 
 	var rec progressRecorder
@@ -431,8 +440,49 @@ func TestRandomTreeInvariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkInvariants(t, tree)
-	assertCounts(t, "root", mustNode(t, tree, tree.Root()), total, 200, 40)
+	assertCounts(t, "root", mustNode(t, tree, tree.Root()), total, total, 200, 40)
 	if n := rec.concurrent.Load(); n != 0 {
 		t.Errorf("onProgress called concurrently %d times", n)
+	}
+}
+
+// sparseLen is the length of d/sparse, which the platform tests leave as a hole.
+const sparseLen = 1 << 20
+
+// assertSparseFixture checks the tree of root, which holds d/sparse and d/f of one unit.
+func assertSparseFixture(t *testing.T, root string) {
+	t.Helper()
+	tree := scanOK(t, root, scan.Options{})
+	checkInvariants(t, tree)
+
+	id := find(t, tree, "d", "sparse")
+	s := mustNode(t, tree, id)
+	if s.Apparent != sparseLen {
+		t.Errorf("sparse Apparent = %d, want its length %d", s.Apparent, sparseLen)
+	}
+	if s.Size >= sparseLen {
+		t.Errorf("sparse Size = %d, want allocated bytes < length %d", s.Size, sparseLen)
+	}
+	f := mustNode(t, tree, find(t, tree, "d", "f"))
+	ancestors := []scan.ID{find(t, tree, "d"), tree.Root()}
+	before := make([]scan.Node, len(ancestors))
+	for i, a := range ancestors {
+		n := mustNode(t, tree, a)
+		if n.Size != s.Size+f.Size || n.Apparent != sparseLen+unit {
+			t.Errorf("%q Size/Apparent = %d/%d, want %d/%d", tree.Path(a), n.Size, n.Apparent, s.Size+f.Size, sparseLen+unit)
+		}
+		before[i] = n
+	}
+
+	if _, err := tree.Remove(id); err != nil {
+		t.Fatalf("Remove(d/sparse) error: %v", err)
+	}
+	checkInvariants(t, tree)
+	for i, a := range ancestors {
+		n, b := mustNode(t, tree, a), before[i]
+		if n.Size != b.Size-s.Size || n.Apparent != b.Apparent-s.Apparent {
+			t.Errorf("%q after Remove(d/sparse) Size/Apparent = %d/%d, want %d/%d",
+				tree.Path(a), n.Size, n.Apparent, b.Size-s.Size, b.Apparent-s.Apparent)
+		}
 	}
 }

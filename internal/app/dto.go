@@ -43,6 +43,7 @@ type View struct {
 	ID        int32
 	Name      string
 	Size      int64
+	Apparent  int64
 	IsDir     bool
 	FileCount int64
 	Aggregate bool
@@ -62,6 +63,7 @@ type Entry struct {
 	ID            int32
 	Name, RelPath string
 	Size          int64
+	Apparent      int64
 	IsDir         bool
 	FileCount     int64
 	ModTime       int64
@@ -133,6 +135,7 @@ func toView(v stats.View) View {
 		ID:        int32(v.ID),
 		Name:      v.Name,
 		Size:      v.Size,
+		Apparent:  v.Apparent,
 		IsDir:     v.IsDir,
 		FileCount: v.FileCount,
 		Aggregate: v.Aggregate,
@@ -154,6 +157,7 @@ func toEntries(es []stats.Entry) []Entry {
 			Name:      e.Name,
 			RelPath:   e.RelPath,
 			Size:      e.Size,
+			Apparent:  e.Apparent,
 			IsDir:     e.IsDir,
 			FileCount: e.FileCount,
 			ModTime:   e.ModTime,

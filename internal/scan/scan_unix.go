@@ -22,3 +22,12 @@ func hardLinkKey(fi fs.FileInfo) (fileKey, bool) {
 }
 
 func isReparseDir(fs.FileInfo) bool { return false }
+
+// allocatedSize returns the bytes allocated on disk; st_blocks counts 512-byte units on every Unix.
+func allocatedSize(_ string, fi fs.FileInfo) int64 {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fi.Size()
+	}
+	return int64(st.Blocks) * 512
+}
