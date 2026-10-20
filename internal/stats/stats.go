@@ -45,6 +45,13 @@ type Crumb struct {
 	Name string
 }
 
+// Collection is the result of Collect.
+type Collection struct {
+	Entries []Entry // the largest matches by Size desc then RelPath asc, at most limit
+	Total   int64   // sum of Size over all matches
+	Count   int64   // number of matches
+}
+
 type cand struct {
 	id       scan.ID
 	size     int64
@@ -133,6 +140,69 @@ func TopDirs(t *scan.Tree, n int) []Entry {
 		}
 	}
 	return top(t, kept, n)
+}
+
+// Collect gathers the topmost nodes keep accepts, walking depth-first in display order without descending into accepted nodes; keep gets each live node with its absolute path (as Tree.Path), and Entries holds the limit largest matches, all of them if limit <= 0.
+func Collect(t *scan.Tree, limit int, keep func(path string, n scan.Node) bool) Collection {
+	if t == nil || keep == nil {
+		return Collection{Entries: []Entry{}}
+	}
+	cs := collect(t, keep)
+	c := Collection{Count: int64(len(cs))}
+	for _, x := range cs {
+		c.Total += x.size
+	}
+	if limit <= 0 {
+		limit = len(cs)
+	}
+	c.Entries = top(t, cs, limit)
+	return c
+}
+
+// collect returns a candidate for each node keep accepts, building every visited node's path from its parent's.
+func collect(t *scan.Tree, keep func(path string, n scan.Node) bool) []cand {
+	root, ok := t.Node(t.Root())
+	if !ok {
+		return nil
+	}
+	if keep(root.Name, root) {
+		return []cand{{id: root.ID, size: root.Size, name: "."}}
+	}
+	const sep = string(filepath.Separator)
+	skip := len(root.Name) + 1 // path[skip:] is a descendant's rel path
+	if strings.HasSuffix(root.Name, sep) {
+		skip--
+	}
+	type frame struct {
+		path, rel string // rel is "" for the root
+		kids      []scan.ID
+	}
+	var cs []cand
+	stack := []frame{{root.Name, "", root.Children}}
+	for len(stack) > 0 {
+		f := &stack[len(stack)-1]
+		if len(f.kids) == 0 {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		n, ok := t.Node(f.kids[0])
+		f.kids = f.kids[1:]
+		if !ok {
+			continue
+		}
+		var path string
+		if strings.HasSuffix(f.path, sep) {
+			path = f.path + n.Name
+		} else {
+			path = f.path + sep + n.Name
+		}
+		if keep(path, n) {
+			cs = append(cs, cand{id: n.ID, size: n.Size, prel: f.rel, name: n.Name})
+		} else if len(n.Children) > 0 {
+			stack = append(stack, frame{path, path[skip:], n.Children})
+		}
+	}
+	return cs
 }
 
 // top sorts candidates by size desc, rel path asc, and returns the first n as entries.
