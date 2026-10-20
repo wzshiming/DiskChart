@@ -1,12 +1,15 @@
 package stats_test
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wzshiming/DiskChart/internal/scan"
@@ -721,4 +724,243 @@ func TestCrumbs(t *testing.T) {
 			t.Errorf("Crumbs(%d) = %+v, want empty", bad, got)
 		}
 	}
+}
+
+// collectCall is one keep call seen by collectRecorder: its arguments and result.
+type collectCall struct {
+	path string
+	node scan.Node
+	kept bool
+}
+
+// collectRecorder wraps keep and records every call to it.
+type collectRecorder struct {
+	keep  func(string, scan.Node) bool
+	calls []collectCall
+}
+
+func (r *collectRecorder) Keep(path string, n scan.Node) bool {
+	kept := r.keep(path, n)
+	r.calls = append(r.calls, collectCall{path, n, kept})
+	return kept
+}
+
+// collectNames keeps the nodes whose Name is one of names.
+func collectNames(names ...string) func(string, scan.Node) bool {
+	return func(_ string, n scan.Node) bool { return slices.Contains(names, n.Name) }
+}
+
+func collectFiles(_ string, n scan.Node) bool { return !n.IsDir }
+
+func collectAlways(string, scan.Node) bool { return true }
+
+func collectNever(string, scan.Node) bool { return false }
+
+func collectCheck(t *testing.T, where string, c stats.Collection, want []stats.Entry, count, total int64) {
+	t.Helper()
+	checkEntries(t, where+".Entries", c.Entries, want)
+	if c.Count != count || c.Total != total {
+		t.Errorf("%s Count/Total = %d/%d, want %d/%d", where, c.Count, c.Total, count, total)
+	}
+}
+
+func collectEmpty(t *testing.T, where string, c stats.Collection) {
+	t.Helper()
+	if c.Entries == nil || len(c.Entries) != 0 || c.Total != 0 || c.Count != 0 {
+		t.Errorf("%s = {Entries:%+v (nil %v) Total:%d Count:%d}, want non-nil empty Entries, Total 0, Count 0",
+			where, c.Entries, c.Entries == nil, c.Total, c.Count)
+	}
+}
+
+func TestCollectByName(t *testing.T) {
+	tree, _ := fixture(t)
+	c := stats.Collect(tree, 0, collectNames("z", "sub", "b.jpg", "noext"))
+	collectCheck(t, "Collect(names z sub b.jpg noext)", c, []stats.Entry{
+		entry(t, tree, "x", "y", "z"),   // 5000
+		entry(t, tree, "pics", "b.jpg"), // 100
+		entry(t, tree, "a", "sub"),      // 50
+		entry(t, tree, "docs", "noext"), // 20
+	}, 4, 5170*unit)
+}
+
+func TestCollectTopmost(t *testing.T) {
+	tree, _ := fixture(t)
+	z := find(t, tree, "x", "y", "z")
+	big := find(t, tree, "x", "y", "z", "big.bin")
+	below := []string{tree.Path(z), tree.Path(big)}
+	rec := &collectRecorder{keep: collectNames("y", "z")}
+	collectCheck(t, "Collect(names y z)", stats.Collect(tree, 0, rec.Keep), []stats.Entry{entry(t, tree, "x", "y")}, 1, 5000*unit)
+	for _, call := range rec.calls {
+		if call.node.ID == z || call.node.ID == big || slices.Contains(below, call.path) {
+			t.Errorf("Collect(names y z) called keep(%q) on ID %d inside the hit x/y", call.path, call.node.ID)
+		}
+	}
+}
+
+func TestCollectByPathPrefix(t *testing.T) {
+	tree, _ := fixture(t)
+	y := tree.Path(find(t, tree, "x", "y"))
+	c := stats.Collect(tree, 0, func(path string, _ scan.Node) bool { return strings.HasPrefix(path, y) })
+	collectCheck(t, fmt.Sprintf("Collect(path prefix %q)", y), c, []stats.Entry{entry(t, tree, "x", "y")}, 1, 5000*unit)
+}
+
+func TestCollectMatchesTopFiles(t *testing.T) {
+	tree, _ := fixture(t)
+	for _, c := range []struct{ limit, n int }{{0, 100}, {3, 3}} {
+		got := stats.Collect(tree, c.limit, collectFiles)
+		collectCheck(t, fmt.Sprintf("Collect(%d, files) vs TopFiles(%d)", c.limit, c.n), got, stats.TopFiles(tree, c.n), 12, 7192*unit)
+	}
+}
+
+func TestCollectLimit(t *testing.T) {
+	tree, _ := fixture(t)
+	all := stats.TopFiles(tree, 100)
+	for _, c := range []struct{ limit, want int }{{1, 1}, {12, 12}, {100, 12}, {0, 12}, {-1, 12}} {
+		got := stats.Collect(tree, c.limit, collectFiles)
+		collectCheck(t, fmt.Sprintf("Collect(%d, files)", c.limit), got, all[:c.want], 12, 7192*unit)
+	}
+}
+
+func TestCollectNever(t *testing.T) {
+	tree, _ := fixture(t)
+	rec := &collectRecorder{keep: collectNever}
+	collectEmpty(t, "Collect(never)", stats.Collect(tree, 0, rec.Keep))
+	if len(rec.calls) != tree.Len() {
+		t.Errorf("Collect(never) called keep %d times, want Tree.Len() = %d", len(rec.calls), tree.Len())
+	}
+}
+
+func TestCollectRoot(t *testing.T) {
+	tree, root := fixture(t)
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := mustNode(t, tree, tree.Root())
+	want := stats.Entry{ID: tree.Root(), Name: filepath.Clean(abs), RelPath: ".", Size: 7192 * unit, Apparent: n.Apparent, IsDir: true, FileCount: 12, ModTime: n.ModTime}
+	rec := &collectRecorder{keep: collectAlways}
+	collectCheck(t, "Collect(always)", stats.Collect(tree, 0, rec.Keep), []stats.Entry{want}, 1, 7192*unit)
+	if len(rec.calls) != 1 {
+		t.Errorf("Collect(always) called keep %d times, want 1 (the root)", len(rec.calls))
+	}
+}
+
+func TestCollectPathEqualsTreePath(t *testing.T) {
+	tree, _ := fixture(t)
+	rec := &collectRecorder{keep: collectNever}
+	stats.Collect(tree, 0, rec.Keep)
+	seen := map[scan.ID]bool{}
+	for _, call := range rec.calls {
+		id := call.node.ID
+		if want := tree.Path(id); call.path != want {
+			t.Errorf("Collect keep path for ID %d = %q, want Tree.Path %q", id, call.path, want)
+		}
+		if want, _ := tree.Node(id); !reflect.DeepEqual(call.node, want) {
+			t.Errorf("Collect keep node = %+v, want Tree.Node(%d) = %+v", call.node, id, want)
+		}
+		if seen[id] {
+			t.Errorf("Collect called keep twice for ID %d (%q)", id, call.path)
+		}
+		seen[id] = true
+	}
+	if len(rec.calls) != tree.Len() {
+		t.Errorf("Collect(never) called keep %d times, want Tree.Len() = %d", len(rec.calls), tree.Len())
+	}
+}
+
+func TestCollectAfterRemove(t *testing.T) {
+	tree, _ := fixture(t)
+	pics := find(t, tree, "pics")
+	picsPath := tree.Path(pics)
+	keep := collectNames("pics", "b", "a.JPG")
+	// a.JPG lies inside the hit pics, so it is never visited.
+	collectCheck(t, "Collect(names pics b a.JPG)", stats.Collect(tree, 0, keep),
+		[]stats.Entry{entry(t, tree, "b"), entry(t, tree, "pics")}, 2, 1500*unit)
+
+	if _, err := tree.Remove(pics); err != nil {
+		t.Fatalf("Remove(pics): %v", err)
+	}
+	rec := &collectRecorder{keep: keep}
+	collectCheck(t, "Collect(names pics b a.JPG) after Remove(pics)", stats.Collect(tree, 0, rec.Keep),
+		[]stats.Entry{entry(t, tree, "b")}, 1, 1000*unit)
+	for _, call := range rec.calls {
+		if strings.HasPrefix(call.path, picsPath) {
+			t.Errorf("Collect after Remove(pics) called keep(%q)", call.path)
+		}
+	}
+}
+
+func TestCollectInvariants(t *testing.T) {
+	tree, _ := fixture(t)
+	y := tree.Path(find(t, tree, "x", "y"))
+	pics := find(t, tree, "pics")
+	keeps := []struct {
+		name string
+		keep func(string, scan.Node) bool
+	}{
+		{"names z sub b.jpg noext", collectNames("z", "sub", "b.jpg", "noext")},
+		{"names y z", collectNames("y", "z")},
+		{"path prefix x/y", func(path string, _ scan.Node) bool { return strings.HasPrefix(path, y) }},
+		{"files", collectFiles},
+		{"never", collectNever},
+		{"always", collectAlways},
+		{"names pics b a.JPG", collectNames("pics", "b", "a.JPG")},
+	}
+	for _, removed := range []bool{false, true} {
+		if removed {
+			if _, err := tree.Remove(pics); err != nil {
+				t.Fatalf("Remove(pics): %v", err)
+			}
+		}
+		for _, k := range keeps {
+			rec := &collectRecorder{keep: k.keep}
+			c := stats.Collect(tree, 0, rec.Keep)
+			collectInvariants(t, tree, fmt.Sprintf("Collect(%s) [pics removed %v]", k.name, removed), c, rec.calls)
+		}
+	}
+}
+
+// collectInvariants checks c = Collect(tree, 0, keep) against keep's recorded calls: Count and Total sum the hits,
+// Entries are exactly the hits, none is an ancestor of another, and they are sorted by Size desc, RelPath asc.
+func collectInvariants(t *testing.T, tree *scan.Tree, where string, c stats.Collection, calls []collectCall) {
+	t.Helper()
+	if len(calls) == 0 {
+		t.Errorf("%s called keep 0 times, want at least once (the root)", where)
+		return
+	}
+	var hits []scan.ID
+	var total int64
+	for _, call := range calls {
+		if call.kept {
+			hits = append(hits, call.node.ID)
+			total += call.node.Size
+		}
+	}
+	if c.Count != int64(len(hits)) || c.Total != total {
+		t.Errorf("%s Count/Total = %d/%d, want %d/%d (keep hits)", where, c.Count, c.Total, len(hits), total)
+	}
+	ids := entryIDs(c.Entries)
+	slices.Sort(ids)
+	slices.Sort(hits)
+	if !slices.Equal(ids, hits) {
+		t.Errorf("%s Entries IDs = %v, want keep hits %v", where, ids, hits)
+	}
+	for _, e := range c.Entries {
+		for p := mustNode(t, tree, e.ID).Parent; p != scan.None; p = mustNode(t, tree, p).Parent {
+			if slices.Contains(ids, p) {
+				t.Errorf("%s entry %q has its ancestor ID %d among the Entries", where, e.RelPath, p)
+			}
+		}
+	}
+	if !slices.IsSortedFunc(c.Entries, func(a, b stats.Entry) int {
+		return cmp.Or(cmp.Compare(b.Size, a.Size), strings.Compare(a.RelPath, b.RelPath))
+	}) {
+		t.Errorf("%s Entries not sorted by Size desc, RelPath asc: %+v", where, c.Entries)
+	}
+}
+
+func TestCollectNil(t *testing.T) {
+	tree, _ := fixture(t)
+	collectEmpty(t, "Collect(nil tree)", stats.Collect(nil, 0, collectAlways))
+	collectEmpty(t, "Collect(nil keep)", stats.Collect(tree, 0, nil))
 }
