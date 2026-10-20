@@ -871,23 +871,29 @@ func TestDeleteRefusedKeepsTreeFresh(t *testing.T) {
 	}
 }
 
-func TestDeleteGuardHasHomeAndMountpoints(t *testing.T) {
-	mounts := []string{"/mnt/fake"}
+func TestDeleteGuardProtectsHomeAndMountpoints(t *testing.T) {
+	// Native separators: Guard.Protected is only ever asked about clean paths.
+	home, mount := filepath.FromSlash("/home/fake"), filepath.FromSlash("/mnt/fake")
 	var g fsops.Guard
 	var gotPath string
 	a, _, root, st := scanDone(t, Deps{
-		Home:        "/home/fake",
-		Mountpoints: func(context.Context) ([]string, error) { return mounts, nil },
+		Home:        home,
+		Mountpoints: func(context.Context) ([]string, error) { return []string{mount}, nil },
 		Delete:      func(guard fsops.Guard, p string) error { g, gotPath = guard, p; return nil },
 	})
 	f := child(t, a, st.RootID, "r.txt")
 	if _, err := a.Delete(f.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if g.Home != "/home/fake" || !slices.Contains(g.Mountpoints, "/mnt/fake") {
-		t.Fatalf("Guard = %+v, want Home /home/fake and Mountpoints containing /mnt/fake", g)
+	if g.Protected == nil {
+		t.Fatal("Guard.Protected = nil, want a predicate protecting Home and mount points")
 	}
-	if want := filepath.Join(root, "r.txt"); gotPath != want {
+	want := filepath.Join(root, "r.txt")
+	if !g.Protected(home) || !g.Protected(mount) || g.Protected(want) {
+		t.Fatalf("Guard.Protected(%q, %q, %q) = %v, %v, %v; want true, true, false",
+			home, mount, want, g.Protected(home), g.Protected(mount), g.Protected(want))
+	}
+	if gotPath != want {
 		t.Fatalf("Deps.Delete path = %q, want %q", gotPath, want)
 	}
 }
