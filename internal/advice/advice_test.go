@@ -113,6 +113,16 @@ func TestVolumeRootAndHomeAreProtected(t *testing.T) {
 	})
 }
 
+func TestHomeOnMountpointIsVolume(t *testing.T) {
+	c, home, _ := testConfig(t)
+	c.Mountpoints = []string{home}
+	runCases(t, advice.New(c), []classifyCase{
+		{path: home, want: protected(advice.Volume)},
+		{path: filepath.Join(home, "Desktop"), want: protected(advice.UserData)},
+		{path: filepath.Join(home, ".cache", "o"), want: recommended(advice.Cache)},
+	})
+}
+
 func TestPointAnchorProtectsOnlyItself(t *testing.T) {
 	c, home, _ := testConfig(t)
 	var cases []classifyCase
@@ -147,6 +157,39 @@ func TestContentsAnchorRecommendsOnlyItsContents(t *testing.T) {
 		{path: filepath.Join(home, ".npm", "_cacache"), want: none},
 		{path: filepath.Join(home, ".npm", "_cacache", "x"), want: recommended(advice.Cache)},
 		{path: filepath.Join(home, ".yarn", "cache", "x"), want: recommended(advice.Cache)},
+	})
+}
+
+func TestVolumeRootContentsAnchorDropped(t *testing.T) {
+	c, home, tmp := testConfig(t)
+	vr := filepath.VolumeName(home) + sep
+	t.Run("TempDir", func(t *testing.T) {
+		cc := c
+		cc.TempDir = vr
+		runCases(t, advice.New(cc), []classifyCase{
+			{path: filepath.Join(home, "x"), want: none},
+			{path: vr + "x", want: none},
+			{path: vr, want: protected(advice.Volume)},
+		})
+	})
+	t.Run("GOMODCACHE", func(t *testing.T) {
+		cc := c
+		cc.Getenv = env(map[string]string{"GOMODCACHE": vr})
+		runCases(t, advice.New(cc), []classifyCase{
+			{path: filepath.Join(home, "pkg", "mod", "x"), want: none},
+		})
+	})
+	t.Run("User.Recommended", func(t *testing.T) {
+		cc := c
+		cc.User.Recommended = []string{vr}
+		runCases(t, advice.New(cc), []classifyCase{
+			{path: filepath.Join(home, "x"), want: none},
+		})
+	})
+	t.Run("ordinary TempDir is kept", func(t *testing.T) {
+		runCases(t, advice.New(c), []classifyCase{
+			{path: filepath.Join(tmp, "x"), want: recommended(advice.Temp)},
+		})
 	})
 }
 

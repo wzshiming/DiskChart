@@ -59,3 +59,19 @@ func TestWindowsRules(t *testing.T) {
 		{path: `C:\USERS\U`, want: protected(advice.Home)},
 	})
 }
+
+// Without Mountpoints, the drive of Home still gets the per-volume anchors.
+func TestWindowsHomeVolumeRootImplied(t *testing.T) {
+	r := advice.New(advice.Config{
+		GOOS:        "windows",
+		Home:        `C:\Users\u`,
+		UID:         "S-1-5-21-1",
+		Mountpoints: nil,
+		Getenv:      env(nil),
+	})
+	runCases(t, r, []classifyCase{
+		{path: `C:\$Recycle.Bin`, want: protected(advice.System)},
+		{path: `C:\$Recycle.Bin\S-1-5-21-1\$R1`, want: recommended(advice.Trash)},
+		{path: `D:\$Recycle.Bin`, want: none},
+	})
+}

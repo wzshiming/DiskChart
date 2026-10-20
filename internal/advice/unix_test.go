@@ -124,3 +124,89 @@ func TestLinuxXDGCacheHome(t *testing.T) {
 		{path: "/home/u/xc/x", want: recommended(advice.Cache)},
 	})
 }
+
+// Without Mountpoints, the volume root of Home still gets the per-volume anchors.
+func TestHomeVolumeRootImplied(t *testing.T) {
+	t.Run("darwin", func(t *testing.T) {
+		r := advice.New(advice.Config{
+			GOOS:        "darwin",
+			Home:        "/Users/u",
+			UID:         "501",
+			Mountpoints: nil,
+			Getenv:      env(nil),
+		})
+		runCases(t, r, []classifyCase{
+			{path: "/.Trashes/501/x", want: recommended(advice.Trash)},
+			{path: "/Volumes/USB/.Trashes/501/x", want: none},
+			{path: "/", want: protected(advice.Volume)},
+		})
+	})
+	t.Run("linux", func(t *testing.T) {
+		r := advice.New(advice.Config{
+			GOOS:        "linux",
+			Home:        "/home/u",
+			UID:         "1000",
+			Mountpoints: nil,
+			Getenv:      env(nil),
+		})
+		runCases(t, r, []classifyCase{
+			{path: "/.Trash-1000/files/x", want: recommended(advice.Trash)},
+			{path: "/.Trash/1000/x", want: recommended(advice.Trash)},
+		})
+	})
+}
+
+// On darwin /var, /tmp and /etc are symlinks into /private, so every anchor under either form must also match the other.
+func TestDarwinPrivateAliases(t *testing.T) {
+	base := advice.Config{
+		GOOS:        "darwin",
+		Home:        "/Users/u",
+		UID:         "501",
+		Mountpoints: []string{"/"},
+		Getenv:      env(nil),
+	}
+	t.Run("TempDir in /var", func(t *testing.T) {
+		c := base
+		c.TempDir = "/var/folders/ab/cd/T"
+		runCases(t, advice.New(c), []classifyCase{
+			{path: "/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
+			{path: "/private/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
+			{path: "/var/folders/ab/cd/C/x", want: recommended(advice.Cache)},
+			{path: "/private/var/folders/ab/cd/C/x", want: recommended(advice.Cache)},
+			{path: "/var/folders/ab/cd/T", want: none},
+			{path: "/private/var/folders/ab/cd/T", want: protected(advice.System)},
+		})
+	})
+	t.Run("TempDir in /private/var", func(t *testing.T) {
+		c := base
+		c.TempDir = "/private/var/folders/ab/cd/T"
+		runCases(t, advice.New(c), []classifyCase{
+			{path: "/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
+		})
+	})
+	t.Run("user rules", func(t *testing.T) {
+		c := base
+		c.User = advice.UserRules{
+			Protected:   []string{"/private/etc/keep"},
+			Recommended: []string{"/var/data/cache"},
+		}
+		runCases(t, advice.New(c), []classifyCase{
+			{path: "/private/var/data/cache/x", want: recommended(advice.Custom)},
+			{path: "/var/data/cache/x", want: recommended(advice.Custom)},
+			{path: "/etc/keep", want: protected(advice.Custom)},
+			{path: "/etc/keep/x", want: protected(advice.Custom)},
+			{path: "/etc", want: protected(advice.System)},
+			{path: "/private/etc/keep/x", want: protected(advice.Custom)},
+		})
+	})
+	t.Run("linux has no aliases", func(t *testing.T) {
+		c := base
+		c.GOOS = "linux"
+		c.Home = "/home/u"
+		c.UID = "1000"
+		c.TempDir = "/var/folders/ab/cd/T"
+		runCases(t, advice.New(c), []classifyCase{
+			{path: "/private/var/folders/ab/cd/T/x", want: none},
+		})
+	})
+}
