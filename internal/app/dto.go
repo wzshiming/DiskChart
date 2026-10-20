@@ -1,6 +1,10 @@
 package app
 
 import (
+	"path/filepath"
+	"strings"
+
+	"github.com/wzshiming/DiskChart/internal/advice"
 	"github.com/wzshiming/DiskChart/internal/scan"
 	"github.com/wzshiming/DiskChart/internal/stats"
 	"github.com/wzshiming/DiskChart/internal/volumes"
@@ -38,7 +42,7 @@ type ScanState struct {
 	TreeStale    bool
 }
 
-// View is a bounded subtree snapshot; aggregate pseudo-nodes have ID -1.
+// View is a bounded subtree snapshot; aggregate pseudo-nodes have ID -1 and no advice.
 type View struct {
 	ID        int32
 	Name      string
@@ -48,7 +52,9 @@ type View struct {
 	FileCount int64
 	Aggregate bool
 	Count     int64
-	Skip      int64 // aggregate only: index of the first merged child in Children(parent)
+	Skip      int64  // aggregate only: index of the first merged child in Children(parent)
+	Advice    string // deletion advice: "protected", "recommended" or ""
+	Reason    string // why; "" exactly when Advice is ""
 	Children  []View
 }
 
@@ -67,6 +73,15 @@ type Entry struct {
 	IsDir         bool
 	FileCount     int64
 	ModTime       int64
+	Advice        string // deletion advice: "protected", "recommended" or ""
+	Reason        string // why; "" exactly when Advice is ""
+}
+
+// CleanupReport lists the largest recommended entries; Total and Count cover every recommended node.
+type CleanupReport struct {
+	Total   int64
+	Count   int64
+	Entries []Entry
 }
 
 // ExtStat is the total size and file count of one extension.
@@ -130,7 +145,32 @@ func toProgress(p scan.Progress) Progress {
 	}
 }
 
-func toView(v stats.View) View {
+// adviser attaches deletion advice to the DTOs of one tree.
+type adviser struct {
+	rules    *advice.Rules
+	root     scan.ID // the scan root, always protected
+	rootPath string  // Tree.Path(root)
+}
+
+// verdict returns the advice and reason for node id at the absolute path; dir says whether it is a directory.
+func (ad adviser) verdict(id scan.ID, path string, dir bool) (string, string) {
+	if id == ad.root {
+		return string(advice.Protected), string(advice.Root)
+	}
+	v := ad.rules.Classify(path, dir)
+	return string(v.Class), string(v.Reason)
+}
+
+// childPath joins name beneath parent byte-for-byte as Tree.Path would.
+func childPath(parent, name string) string {
+	if strings.HasSuffix(parent, string(filepath.Separator)) {
+		return parent + name
+	}
+	return parent + string(filepath.Separator) + name
+}
+
+// toView converts v, whose node lives at the absolute path.
+func toView(v stats.View, path string, ad adviser) View {
 	out := View{
 		ID:        int32(v.ID),
 		Name:      v.Name,
@@ -143,13 +183,16 @@ func toView(v stats.View) View {
 		Skip:      v.Skip,
 		Children:  make([]View, len(v.Children)),
 	}
+	if !v.Aggregate {
+		out.Advice, out.Reason = ad.verdict(v.ID, path, v.IsDir)
+	}
 	for i, c := range v.Children {
-		out.Children[i] = toView(c)
+		out.Children[i] = toView(c, childPath(path, c.Name), ad)
 	}
 	return out
 }
 
-func toEntries(es []stats.Entry) []Entry {
+func toEntries(es []stats.Entry, ad adviser) []Entry {
 	out := make([]Entry, len(es))
 	for i, e := range es {
 		out[i] = Entry{
@@ -162,6 +205,7 @@ func toEntries(es []stats.Entry) []Entry {
 			FileCount: e.FileCount,
 			ModTime:   e.ModTime,
 		}
+		out[i].Advice, out[i].Reason = ad.verdict(e.ID, childPath(ad.rootPath, e.RelPath), e.IsDir)
 	}
 	return out
 }

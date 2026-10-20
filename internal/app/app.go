@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/wzshiming/DiskChart/internal/advice"
 	"github.com/wzshiming/DiskChart/internal/fsops"
 	"github.com/wzshiming/DiskChart/internal/scan"
 	"github.com/wzshiming/DiskChart/internal/stats"
@@ -50,20 +53,26 @@ type Deps struct {
 	Mountpoints func(ctx context.Context) ([]string, error)
 	Reveal      func(ctx context.Context, path string) error
 	Delete      func(g fsops.Guard, path string) error
+	Rules       func(advice.Config) *advice.Rules
 	Home        string
 	Version     string
 }
 
 // App manages one scan at a time and serves queries over its result.
 type App struct {
-	rt   Runtime
-	deps Deps
+	rt      Runtime
+	deps    Deps
+	tempDir string // host temporary directory with symlinks resolved
+	uid     string // host user id, "" when unknown
 
 	mu          sync.Mutex
 	state       ScanState
 	tree        *scan.Tree
 	cancel      context.CancelFunc
 	mountpoints []string
+	rules       *advice.Rules
+	userRules   advice.UserRules
+	cleanup     *CleanupReport // cached full Cleanup of the current tree; nil when invalid
 }
 
 // New returns an idle App using rt and deps.
@@ -83,13 +92,50 @@ func New(rt Runtime, deps Deps) *App {
 	if deps.Delete == nil {
 		deps.Delete = func(g fsops.Guard, p string) error { return g.Delete(p) }
 	}
+	if deps.Rules == nil {
+		deps.Rules = advice.New
+	}
 	if deps.Home == "" {
 		deps.Home, _ = os.UserHomeDir()
 	}
 	if deps.Version == "" {
 		deps.Version = "dev"
 	}
-	return &App{rt: rt, deps: deps, state: ScanState{Status: StatusIdle, RootID: -1}}
+	a := &App{rt: rt, deps: deps, tempDir: hostTempDir(), uid: hostUID(), state: ScanState{Status: StatusIdle, RootID: -1}}
+	a.rebuildRules()
+	return a
+}
+
+// hostTempDir returns the temporary directory with symlinks resolved, or merely cleaned when that fails.
+func hostTempDir() string {
+	d := os.TempDir()
+	if r, err := filepath.EvalSymlinks(d); err == nil {
+		return r
+	}
+	return filepath.Clean(d)
+}
+
+// hostUID returns the current user's id, or "" when it cannot be determined.
+func hostUID() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.Uid
+}
+
+// rebuildRules recompiles the advice rules from the current host state and drops the Cleanup cache; the caller holds a.mu except in New.
+func (a *App) rebuildRules() {
+	a.rules = a.deps.Rules(advice.Config{
+		GOOS:        runtime.GOOS,
+		Home:        a.deps.Home,
+		TempDir:     a.tempDir,
+		UID:         a.uid,
+		Mountpoints: a.mountpoints,
+		Getenv:      os.Getenv,
+		User:        a.userRules,
+	})
+	a.cleanup = nil
 }
 
 // Info returns the version and platform.
@@ -130,6 +176,7 @@ func (a *App) StartScan(root string, opts ScanOptions) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.tree = nil
+	a.cleanup = nil
 	a.cancel = cancel
 	a.mountpoints = nil
 	a.state = ScanState{Status: StatusScanning, Root: root, RootID: -1}
@@ -141,6 +188,7 @@ func (a *App) StartScan(root string, opts ScanOptions) error {
 	}
 	a.mu.Lock()
 	a.mountpoints = mps
+	a.rebuildRules()
 	a.mu.Unlock()
 
 	go a.run(ctx, cancel, root, scan.Options{SameDevice: opts.SameDevice, ExcludeMountpoints: mps})
@@ -189,6 +237,7 @@ func (a *App) run(ctx context.Context, cancel context.CancelFunc, root string, o
 			DurationMs: dur.Milliseconds(),
 		}
 	}
+	a.cleanup = nil
 	a.cancel = nil
 	ev := FinishedEvent{Status: s.Status, Error: s.Error, Root: root, RootID: s.RootID, Summary: s.Summary}
 	a.mu.Unlock()
@@ -225,6 +274,12 @@ func (a *App) node(id int32) (*scan.Tree, scan.Node, error) {
 	return a.tree, n, nil
 }
 
+// adviser returns the advice classifier for t; the caller must hold a.mu.
+func (a *App) adviser(t *scan.Tree) adviser {
+	root := t.Root()
+	return adviser{rules: a.rules, root: root, rootPath: t.Path(root)}
+}
+
 // Subtree returns a bounded view of the subtree at id.
 func (a *App) Subtree(id int32, depth, maxChildren int, minFraction float64) (View, error) {
 	a.mu.Lock()
@@ -237,10 +292,10 @@ func (a *App) Subtree(id int32, depth, maxChildren int, minFraction float64) (Vi
 	if !ok {
 		return View{}, ErrInvalidID
 	}
-	return toView(v), nil
+	return toView(v, t.Path(scan.ID(id)), a.adviser(t)), nil
 }
 
-// maxChildrenPage caps the limit accepted by Children.
+// maxChildrenPage caps the limit accepted by Children and Cleanup.
 const maxChildrenPage = 1000
 
 // Children returns the live children of directory id in display order, paged by offset and limit.
@@ -258,7 +313,7 @@ func (a *App) Children(id int32, offset, limit int) ([]Entry, error) {
 	if !ok {
 		return nil, ErrInvalidID
 	}
-	return toEntries(es), nil
+	return toEntries(es, a.adviser(t)), nil
 }
 
 // Crumbs returns the path from the root to id.
@@ -287,7 +342,7 @@ func (a *App) TopFiles(n int) ([]Entry, error) {
 	if a.tree == nil {
 		return nil, ErrNoTree
 	}
-	return toEntries(stats.TopFiles(a.tree, n)), nil
+	return toEntries(stats.TopFiles(a.tree, n), a.adviser(a.tree)), nil
 }
 
 // TopDirs returns the n largest directories.
@@ -297,7 +352,32 @@ func (a *App) TopDirs(n int) ([]Entry, error) {
 	if a.tree == nil {
 		return nil, ErrNoTree
 	}
-	return toEntries(stats.TopDirs(a.tree, n)), nil
+	return toEntries(stats.TopDirs(a.tree, n), a.adviser(a.tree)), nil
+}
+
+// Cleanup returns the limit (clamped to [0, 1000]) largest recommended nodes plus the size and count of all of them.
+func (a *App) Cleanup(limit int) (CleanupReport, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tree == nil {
+		return CleanupReport{}, ErrNoTree
+	}
+	if a.cleanup == nil {
+		a.cleanup = a.collectCleanup()
+	}
+	limit = min(max(limit, 0), maxChildrenPage)
+	r := *a.cleanup
+	r.Entries = slices.Clone(r.Entries[:min(limit, len(r.Entries))])
+	return r, nil
+}
+
+// collectCleanup gathers the topmost recommended nodes of the tree; the caller must hold a.mu.
+func (a *App) collectCleanup() *CleanupReport {
+	t, rules, root := a.tree, a.rules, a.tree.Root()
+	c := stats.Collect(t, maxChildrenPage, func(path string, n scan.Node) bool {
+		return n.ID != root && rules.Classify(path, n.IsDir).Class == advice.Recommended
+	})
+	return &CleanupReport{Total: c.Total, Count: c.Count, Entries: toEntries(c.Entries, a.adviser(t))}
 }
 
 // Extensions returns the size breakdown by extension, keeping the topK largest.
@@ -375,10 +455,9 @@ func (a *App) Delete(id int32) (DeleteResult, error) {
 		return DeleteResult{}, ErrRootDelete
 	}
 	p := t.Path(scan.ID(id))
-	mps, home := a.mountpoints, a.deps.Home
+	rules := a.rules
 	g := fsops.Guard{Protected: func(path string) bool {
-		return slices.ContainsFunc(mps, func(m string) bool { return filepath.Clean(m) == path }) ||
-			(home != "" && path == filepath.Clean(home))
+		return rules.Classify(path, false).Class == advice.Protected
 	}}
 	if err := a.deps.Delete(g, p); err != nil {
 		if !errors.Is(err, fsops.ErrRefused) {
@@ -393,6 +472,7 @@ func (a *App) Delete(id int32) (DeleteResult, error) {
 		a.mu.Unlock()
 		return DeleteResult{}, err
 	}
+	a.cleanup = nil
 	a.mu.Unlock()
 
 	res := DeleteResult{ParentID: int32(parent), RemovedSize: n.Size, RemovedFiles: 1}
