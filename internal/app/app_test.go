@@ -19,6 +19,7 @@ import (
 	"github.com/wzshiming/DiskChart/internal/advice"
 	"github.com/wzshiming/DiskChart/internal/fsops"
 	"github.com/wzshiming/DiskChart/internal/scan"
+	"github.com/wzshiming/DiskChart/internal/userrules"
 	"github.com/wzshiming/DiskChart/internal/volumes"
 )
 
@@ -1462,5 +1463,402 @@ func TestRulesConfigFromHost(t *testing.T) {
 	}
 	if len(c.User.Protected)+len(c.User.Recommended)+len(c.User.Names) != 0 {
 		t.Errorf("Deps.Rules config User = %+v, want zero UserRules", c.User)
+	}
+}
+
+// TestMain points every config-dir lookup at a scratch directory, so the default
+// userrules.Store that New builds without Deps.UserRulesStore never reads the developer's rules.json.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "diskchart-app-test-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "TestMain:", err)
+		os.Exit(1)
+	}
+	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "AppData", "LocalAppData"} {
+		if err := os.Setenv(k, dir); err != nil {
+			fmt.Fprintln(os.Stderr, "TestMain:", err)
+			os.Exit(1)
+		}
+	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// rulesStore returns a Store over rules.json in a fresh temp dir.
+func rulesStore(t *testing.T) userrules.Store {
+	t.Helper()
+	return userrules.Store{File: filepath.Join(t.TempDir(), "rules.json")}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", p, err)
+	}
+	return string(b)
+}
+
+// appRules converts u to the DTO; both types carry the same three lists.
+func appRules(u advice.UserRules) UserRules {
+	return UserRules{Protected: u.Protected, Recommended: u.Recommended, Names: u.Names}
+}
+
+// noRules is the DTO of no rules as UserRules reports it: three empty, non-nil slices.
+func noRules() UserRules {
+	return UserRules{Protected: []string{}, Recommended: []string{}, Names: []string{}}
+}
+
+// advFromUser is a Deps.Rules that compiles the hermetic table around home with the user rules the App passes in.
+func advFromUser(home string) func(advice.Config) *advice.Rules {
+	return func(c advice.Config) *advice.Rules { return advRules(home, c.User) }
+}
+
+var (
+	advCustomProtected   = adv{"protected", "custom"}
+	advCustomRecommended = adv{"recommended", "custom"}
+)
+
+// rulesSpy records every config Deps.Rules is called with and delegates to build.
+type rulesSpy struct {
+	mu    sync.Mutex
+	cfgs  []advice.Config
+	build func(advice.Config) *advice.Rules
+}
+
+func (s *rulesSpy) rules(c advice.Config) *advice.Rules {
+	s.mu.Lock()
+	s.cfgs = append(s.cfgs, c)
+	s.mu.Unlock()
+	return s.build(c)
+}
+
+func (s *rulesSpy) configs() []advice.Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.cfgs)
+}
+
+// fakeStore is a UserRulesStore that loads fixed rules and fails every Save with err.
+type fakeStore struct {
+	path  string
+	rules advice.UserRules
+	err   error
+}
+
+func (s fakeStore) Path() string                    { return s.path }
+func (s fakeStore) Load() (advice.UserRules, error) { return s.rules, nil }
+func (s fakeStore) Save(advice.UserRules) error     { return s.err }
+
+func TestEventPayloadsIncludeRulesChanged(t *testing.T) {
+	if EventRulesChanged != "rules:changed" {
+		t.Errorf("EventRulesChanged = %q, want rules:changed", EventRulesChanged)
+	}
+	f, ok := reflect.TypeFor[EventPayloads]().FieldByName("RulesChanged")
+	if !ok || f.Type != reflect.TypeFor[RulesChangedEvent]() {
+		t.Fatalf("EventPayloads.RulesChanged present %v with type %v, want a RulesChangedEvent field", ok, f.Type)
+	}
+}
+
+func TestDefaultStoreUsesDefaultPath(t *testing.T) {
+	t.Run("default path", func(t *testing.T) {
+		p, err := userrules.DefaultPath()
+		if err != nil {
+			t.Skipf("DefaultPath: %v", err)
+		}
+		info := New(newFakeRuntime(), Deps{}).UserRules()
+		if info.Path != p || info.LoadError != "" || !reflect.DeepEqual(info.Rules, noRules()) {
+			t.Fatalf("UserRules() with the default store = %+v, want Path %q, no LoadError and no rules", info, p)
+		}
+	})
+	t.Run("no config dir", func(t *testing.T) {
+		for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+			t.Setenv(k, "")
+		}
+		if _, err := os.UserConfigDir(); err == nil {
+			t.Skipf("clearing the environment does not make os.UserConfigDir fail on %s", runtime.GOOS)
+		}
+		a := New(newFakeRuntime(), Deps{})
+		if info := a.UserRules(); info.Path != "" || info.LoadError != userrules.ErrNoPath.Error() {
+			t.Errorf("UserRules() without a config dir = %+v, want Path \"\" and LoadError %q", info, userrules.ErrNoPath)
+		}
+		if err := a.SetUserRules(UserRules{Names: []string{"x"}}); !errors.Is(err, userrules.ErrNoPath) {
+			t.Errorf("SetUserRules without a config dir = %v, want ErrNoPath", err)
+		}
+	})
+}
+
+func TestNewLoadsUserRules(t *testing.T) {
+	st := rulesStore(t)
+	want := advice.UserRules{Protected: []string{"~/keep"}, Recommended: []string{"~/junk"}, Names: []string{"target"}}
+	if err := st.Save(want); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	spy := &rulesSpy{build: advice.New}
+	a := New(newFakeRuntime(), Deps{UserRulesStore: st, Rules: spy.rules})
+	cfgs := spy.configs()
+	if len(cfgs) == 0 {
+		t.Fatal("Deps.Rules not called by New")
+	}
+	if !reflect.DeepEqual(cfgs[0].User, want) {
+		t.Errorf("first Deps.Rules config User = %+v, want the stored %+v", cfgs[0].User, want)
+	}
+	if got, exp := a.UserRules(), (UserRulesInfo{Rules: appRules(want), Path: st.Path()}); !reflect.DeepEqual(got, exp) {
+		t.Errorf("UserRules() = %+v, want %+v", got, exp)
+	}
+}
+
+func TestUserRulesEmptyNonNil(t *testing.T) {
+	info := New(newFakeRuntime(), Deps{UserRulesStore: rulesStore(t)}).UserRules()
+	if info.LoadError != "" || !reflect.DeepEqual(info.Rules, noRules()) {
+		t.Errorf("UserRules() without a file = %#v, want three empty non-nil slices and no LoadError", info)
+	}
+
+	st := rulesStore(t)
+	stored := advice.UserRules{Protected: []string{"~/keep"}, Recommended: []string{"~/junk"}, Names: []string{"target"}}
+	if err := st.Save(stored); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	a := New(newFakeRuntime(), Deps{UserRulesStore: st})
+	got := a.UserRules()
+	if !reflect.DeepEqual(got.Rules, appRules(stored)) {
+		t.Fatalf("UserRules().Rules = %+v, want %+v", got.Rules, appRules(stored))
+	}
+	got.Rules.Protected[0], got.Rules.Recommended[0], got.Rules.Names[0] = "x", "y", "z"
+	if again := a.UserRules(); !reflect.DeepEqual(again.Rules, appRules(stored)) {
+		t.Errorf("UserRules().Rules after writing to a previous result = %+v, want unchanged %+v", again.Rules, appRules(stored))
+	}
+}
+
+func TestSetUserRulesApplies(t *testing.T) {
+	root := adviceFixture(t)
+	home := filepath.Join(root, "home")
+	writeFile(t, filepath.Join(home, "keep", "k"), 1)
+	writeFile(t, filepath.Join(home, "junk", "j"), 1)
+	st := rulesStore(t)
+	var mu sync.Mutex
+	scans := 0
+	a, rt, state := advScanRoot(t, root, Deps{
+		UserRulesStore: st,
+		Rules:          advFromUser(home),
+		Scan: func(ctx context.Context, root string, opts scan.Options, onProgress func(scan.Progress)) (*scan.Tree, error) {
+			mu.Lock()
+			scans++
+			mu.Unlock()
+			return scan.Scan(ctx, root, opts, onProgress)
+		},
+	})
+	keep, junk := filepath.Join(home, "keep"), filepath.Join(home, "junk")
+	if err := a.SetUserRules(UserRules{Protected: []string{keep}, Recommended: []string{junk}}); err != nil {
+		t.Fatalf("SetUserRules: %v", err)
+	}
+
+	homeID := child(t, a, state.RootID, "home").ID
+	es, err := a.Children(homeID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(home): %v", err)
+	}
+	keepE, junkE := advEntry(t, "Children(home)", es, "keep"), advEntry(t, "Children(home)", es, "junk")
+	if got := advOfEntry(keepE); got != advCustomProtected {
+		t.Errorf("Children(home) keep advice = %+v, want %+v", got, advCustomProtected)
+	}
+	if got := advOfEntry(junkE); got != advNone {
+		t.Errorf("Children(home) junk advice = %+v, want none: a recommended anchor keeps itself", got)
+	}
+	jes, err := a.Children(junkE.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(junk): %v", err)
+	}
+	if got := advOfEntry(advEntry(t, "Children(junk)", jes, "j")); got != advCustomRecommended {
+		t.Errorf("Children(junk) j advice = %+v, want %+v", got, advCustomRecommended)
+	}
+	if r, err := a.Cleanup(10); err != nil || r.Count != 2 || r.Total != 51*unit {
+		t.Errorf("Cleanup(10) = %+v, %v, want Count 2 (node_modules, junk/j) and Total %d", r, err, 51*unit)
+	}
+	if _, err := a.Delete(keepE.ID); !errors.Is(err, fsops.ErrRefused) {
+		t.Errorf("Delete(keep) error = %v, want fsops.ErrRefused", err)
+	}
+	if _, err := os.Lstat(filepath.Join(keep, "k")); err != nil {
+		t.Errorf("home/keep/k after refused delete: %v, want still on disk", err)
+	}
+
+	want := advice.UserRules{Protected: []string{keep}, Recommended: []string{junk}, Names: []string{}}
+	scratch := rulesStore(t)
+	if err := scratch.Save(want); err != nil {
+		t.Fatalf("scratch Save: %v", err)
+	}
+	if got, exp := readFile(t, st.File), readFile(t, scratch.File); got != exp {
+		t.Errorf("rules file = %q, want Store.Save's bytes %q", got, exp)
+	}
+	if got, exp := a.UserRules(), (UserRulesInfo{Rules: appRules(want), Path: st.Path()}); !reflect.DeepEqual(got, exp) {
+		t.Errorf("UserRules() = %+v, want %+v", got, exp)
+	}
+	evs := rt.eventsNamed(EventRulesChanged)
+	if len(evs) != 1 || evs[0].Data != (RulesChangedEvent{}) {
+		t.Errorf("rules:changed events = %+v, want exactly one with payload RulesChangedEvent{}", evs)
+	}
+	if n := len(rt.eventsNamed(EventTreeChanged)); n != 0 {
+		t.Errorf("tree:changed emitted %d times by SetUserRules, want 0", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if scans != 1 {
+		t.Errorf("Deps.Scan called %d times, want 1: new rules apply without rescanning", scans)
+	}
+}
+
+func TestSetUserRulesNormalizes(t *testing.T) {
+	st := rulesStore(t)
+	a := New(newFakeRuntime(), Deps{UserRulesStore: st})
+	abs := filepath.Join(t.TempDir(), "keep")
+	in := UserRules{
+		Protected:   []string{" " + abs + " ", abs, "", "~/x", "~", "~"},
+		Recommended: []string{" ", "~/y", "~/y "},
+		Names:       []string{"a", " a ", "b", ""},
+	}
+	if err := a.SetUserRules(in); err != nil {
+		t.Fatalf("SetUserRules: %v", err)
+	}
+	want := UserRules{Protected: []string{abs, "~/x", "~"}, Recommended: []string{"~/y"}, Names: []string{"a", "b"}}
+	if got, exp := a.UserRules(), (UserRulesInfo{Rules: want, Path: st.Path()}); !reflect.DeepEqual(got, exp) {
+		t.Errorf("UserRules() = %+v, want normalized %+v", got, exp)
+	}
+	if got, err := st.Load(); err != nil || !reflect.DeepEqual(appRules(got), want) {
+		t.Errorf("Store.Load() = %+v, %v, want normalized %+v", got, err, want)
+	}
+}
+
+func TestSetUserRulesInvalid(t *testing.T) {
+	root := adviceFixture(t)
+	home := filepath.Join(root, "home")
+	st := rulesStore(t)
+	if err := st.Save(advice.UserRules{Names: []string{"a"}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	spy := &rulesSpy{build: advFromUser(home)}
+	a, rt, state := advScanRoot(t, root, Deps{UserRulesStore: st, Rules: spy.rules})
+	file, info, calls := readFile(t, st.File), a.UserRules(), len(spy.configs())
+	before, err := a.Cleanup(10)
+	if err != nil || before.Count != 2 {
+		t.Fatalf("Cleanup(10) before = %+v, %v, want Count 2 (a, node_modules)", before, err)
+	}
+
+	err = a.SetUserRules(UserRules{Protected: []string{"rel"}, Names: []string{"b"}})
+	if !errors.Is(err, userrules.ErrInvalidRules) {
+		t.Fatalf("SetUserRules(invalid) = %v, want userrules.ErrInvalidRules", err)
+	}
+	if got := readFile(t, st.File); got != file {
+		t.Errorf("rules file after rejected SetUserRules = %q, want unchanged %q", got, file)
+	}
+	if got := a.UserRules(); !reflect.DeepEqual(got, info) {
+		t.Errorf("UserRules() after rejected SetUserRules = %+v, want unchanged %+v", got, info)
+	}
+	es, err := a.Children(state.RootID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(root): %v", err)
+	}
+	if got := advOfEntry(advEntry(t, "Children(root)", es, "a")); got != advCustomRecommended {
+		t.Errorf("Children(root) a advice = %+v, want still %+v", got, advCustomRecommended)
+	}
+	if got := advOfEntry(advEntry(t, "Children(root)", es, "b")); got != advNone {
+		t.Errorf("Children(root) b advice = %+v, want none: a rejected set must not apply in part", got)
+	}
+	if after, err := a.Cleanup(10); err != nil || !reflect.DeepEqual(after, before) {
+		t.Errorf("Cleanup(10) after rejected SetUserRules = %+v, %v, want unchanged %+v", after, err, before)
+	}
+	if n := len(spy.configs()); n != calls {
+		t.Errorf("Deps.Rules called %d times after rejected SetUserRules, want still %d", n, calls)
+	}
+	if n := len(rt.eventsNamed(EventRulesChanged)); n != 0 {
+		t.Errorf("rules:changed emitted %d times after rejected SetUserRules, want 0", n)
+	}
+}
+
+func TestSetUserRulesSaveFails(t *testing.T) {
+	boom := errors.New("boom")
+	fs := fakeStore{path: filepath.Join("fake", "rules.json"), rules: advice.UserRules{Names: []string{"x"}}, err: boom}
+	spy := &rulesSpy{build: advice.New}
+	rt := newFakeRuntime()
+	a := New(rt, Deps{UserRulesStore: fs, Rules: spy.rules})
+	calls := len(spy.configs())
+	want := UserRulesInfo{Rules: UserRules{Protected: []string{}, Recommended: []string{}, Names: []string{"x"}}, Path: fs.path}
+	if got := a.UserRules(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("UserRules() = %+v, want %+v", got, want)
+	}
+	if err := a.SetUserRules(UserRules{Names: []string{"y"}}); !errors.Is(err, boom) {
+		t.Fatalf("SetUserRules with a failing Save = %v, want %v", err, boom)
+	}
+	if got := a.UserRules(); !reflect.DeepEqual(got, want) {
+		t.Errorf("UserRules() after failed Save = %+v, want unchanged %+v", got, want)
+	}
+	if n := len(spy.configs()); n != calls {
+		t.Errorf("Deps.Rules called %d times after failed Save, want still %d", n, calls)
+	}
+	if n := len(rt.eventsNamed(EventRulesChanged)); n != 0 {
+		t.Errorf("rules:changed emitted %d times after failed Save, want 0", n)
+	}
+}
+
+func TestCorruptFileRecovers(t *testing.T) {
+	st := rulesStore(t)
+	if err := os.WriteFile(st.File, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spy := &rulesSpy{build: advice.New}
+	rt := newFakeRuntime()
+	a := New(rt, Deps{UserRulesStore: st, Rules: spy.rules})
+	info := a.UserRules()
+	if info.Path != st.Path() || !strings.Contains(info.LoadError, st.File) || !reflect.DeepEqual(info.Rules, noRules()) {
+		t.Errorf("UserRules() over a corrupt file = %#v, want Path %q, a LoadError naming it and no rules", info, st.File)
+	}
+	if cfgs := spy.configs(); len(cfgs) == 0 || len(cfgs[0].User.Protected)+len(cfgs[0].User.Recommended)+len(cfgs[0].User.Names) != 0 {
+		t.Errorf("Deps.Rules configs from New = %+v, want one call with zero User", cfgs)
+	}
+
+	if err := a.SetUserRules(UserRules{Names: []string{"target"}}); err != nil {
+		t.Fatalf("SetUserRules after a corrupt load: %v", err)
+	}
+	want := UserRules{Protected: []string{}, Recommended: []string{}, Names: []string{"target"}}
+	if got, exp := a.UserRules(), (UserRulesInfo{Rules: want, Path: st.Path()}); !reflect.DeepEqual(got, exp) {
+		t.Errorf("UserRules() after SetUserRules = %+v, want %+v with LoadError cleared", got, exp)
+	}
+	if got, err := (userrules.Store{File: st.File}).Load(); err != nil || !reflect.DeepEqual(appRules(got), want) {
+		t.Errorf("fresh Store.Load() = %+v, %v, want %+v", got, err, want)
+	}
+	if n := len(rt.eventsNamed(EventRulesChanged)); n != 1 {
+		t.Errorf("rules:changed emitted %d times, want 1", n)
+	}
+}
+
+func TestSetUserRulesConcurrent(t *testing.T) {
+	const n = 8
+	st := rulesStore(t)
+	rt := newFakeRuntime()
+	a := New(rt, Deps{UserRulesStore: st})
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { errs[i] = a.SetUserRules(UserRules{Names: []string{fmt.Sprintf("n%d", i)}}) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("SetUserRules #%d: %v", i, err)
+		}
+	}
+	info := a.UserRules()
+	if len(info.Rules.Names) != 1 || !strings.HasPrefix(info.Rules.Names[0], "n") {
+		t.Errorf("UserRules().Rules = %+v, want exactly one of the concurrently set Names", info.Rules)
+	}
+	if got, err := st.Load(); err != nil || !reflect.DeepEqual(appRules(got), info.Rules) {
+		t.Errorf("Store.Load() = %+v, %v, want the final UserRules() %+v", got, err, info.Rules)
+	}
+	if evs := rt.eventsNamed(EventRulesChanged); len(evs) != n {
+		t.Errorf("rules:changed emitted %d times, want %d", len(evs), n)
+	}
+	es, err := os.ReadDir(filepath.Dir(st.File))
+	if err != nil || len(es) != 1 || es[0].Name() != "rules.json" {
+		t.Errorf("rules dir holds %d entries (%v), want rules.json only", len(es), err)
 	}
 }

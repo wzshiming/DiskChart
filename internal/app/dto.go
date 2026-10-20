@@ -116,11 +116,29 @@ type FinishedEvent struct {
 // TreeChangedEvent is the payload of EventTreeChanged.
 type TreeChangedEvent struct{ RemovedID, ParentID int32 }
 
+// UserRules are the user's own advice rules as stored; paths may start with ~ to mean the home directory.
+type UserRules struct {
+	Protected   []string // subtrees that must never be deleted
+	Recommended []string // directories whose contents are safe to clean up
+	Names       []string // directory base names safe to clean up wherever they occur
+}
+
+// UserRulesInfo is the current user rules and the file they live in; LoadError says why that file failed to load, "" when it loaded.
+type UserRulesInfo struct {
+	Rules     UserRules
+	Path      string
+	LoadError string
+}
+
+// RulesChangedEvent is the payload of EventRulesChanged, emitted after the user rules were saved and applied.
+type RulesChangedEvent struct{}
+
 // EventPayloads exists only so Wails generates TS models for the event payloads.
 type EventPayloads struct {
-	Progress    Progress
-	Finished    FinishedEvent
-	TreeChanged TreeChangedEvent
+	Progress     Progress
+	Finished     FinishedEvent
+	TreeChanged  TreeChangedEvent
+	RulesChanged RulesChangedEvent
 }
 
 func toVolume(v volumes.Volume) Volume {
@@ -144,6 +162,14 @@ func toProgress(p scan.Progress) Progress {
 		ElapsedMs:   p.Elapsed.Milliseconds(),
 	}
 }
+
+// toUserRules copies u with every slice non-nil, so the frontend never sees null.
+func toUserRules(u advice.UserRules) UserRules {
+	return UserRules{Protected: cloneStrings(u.Protected), Recommended: cloneStrings(u.Recommended), Names: cloneStrings(u.Names)}
+}
+
+// cloneStrings returns a non-nil copy of s.
+func cloneStrings(s []string) []string { return append([]string{}, s...) }
 
 // adviser attaches deletion advice to the DTOs of one tree.
 type adviser struct {

@@ -16,6 +16,7 @@ import (
 	"github.com/wzshiming/DiskChart/internal/fsops"
 	"github.com/wzshiming/DiskChart/internal/scan"
 	"github.com/wzshiming/DiskChart/internal/stats"
+	"github.com/wzshiming/DiskChart/internal/userrules"
 	"github.com/wzshiming/DiskChart/internal/volumes"
 )
 
@@ -24,6 +25,7 @@ const (
 	EventScanProgress = "scan:progress"
 	EventScanFinished = "scan:finished"
 	EventTreeChanged  = "tree:changed"
+	EventRulesChanged = "rules:changed"
 )
 
 // Scan lifecycle statuses reported in ScanState.Status.
@@ -46,16 +48,24 @@ var (
 
 var errEmptyRoot = errors.New("app: empty scan root")
 
+// UserRulesStore persists the user's own advice rules.
+type UserRulesStore interface {
+	Path() string
+	Load() (advice.UserRules, error)
+	Save(advice.UserRules) error
+}
+
 // Deps are App's collaborators; New fills zero fields with the real implementations.
 type Deps struct {
-	Scan        func(ctx context.Context, root string, opts scan.Options, onProgress func(scan.Progress)) (*scan.Tree, error)
-	ListVolumes func(ctx context.Context) ([]volumes.Volume, error)
-	Mountpoints func(ctx context.Context) ([]string, error)
-	Reveal      func(ctx context.Context, path string) error
-	Delete      func(g fsops.Guard, path string) error
-	Rules       func(advice.Config) *advice.Rules
-	Home        string
-	Version     string
+	Scan           func(ctx context.Context, root string, opts scan.Options, onProgress func(scan.Progress)) (*scan.Tree, error)
+	ListVolumes    func(ctx context.Context) ([]volumes.Volume, error)
+	Mountpoints    func(ctx context.Context) ([]string, error)
+	Reveal         func(ctx context.Context, path string) error
+	Delete         func(g fsops.Guard, path string) error
+	Rules          func(advice.Config) *advice.Rules
+	UserRulesStore UserRulesStore
+	Home           string
+	Version        string
 }
 
 // App manages one scan at a time and serves queries over its result.
@@ -65,14 +75,15 @@ type App struct {
 	tempDir string // host temporary directory with symlinks resolved
 	uid     string // host user id, "" when unknown
 
-	mu          sync.Mutex
-	state       ScanState
-	tree        *scan.Tree
-	cancel      context.CancelFunc
-	mountpoints []string
-	rules       *advice.Rules
-	userRules   advice.UserRules
-	cleanup     *CleanupReport // cached full Cleanup of the current tree; nil when invalid
+	mu           sync.Mutex
+	state        ScanState
+	tree         *scan.Tree
+	cancel       context.CancelFunc
+	mountpoints  []string
+	rules        *advice.Rules
+	userRules    advice.UserRules
+	rulesLoadErr string         // why the rules file failed to load; "" when it loaded
+	cleanup      *CleanupReport // cached full Cleanup of the current tree; nil when invalid
 }
 
 // New returns an idle App using rt and deps.
@@ -95,6 +106,10 @@ func New(rt Runtime, deps Deps) *App {
 	if deps.Rules == nil {
 		deps.Rules = advice.New
 	}
+	if deps.UserRulesStore == nil {
+		p, _ := userrules.DefaultPath()
+		deps.UserRulesStore = userrules.Store{File: p}
+	}
 	if deps.Home == "" {
 		deps.Home, _ = os.UserHomeDir()
 	}
@@ -102,6 +117,11 @@ func New(rt Runtime, deps Deps) *App {
 		deps.Version = "dev"
 	}
 	a := &App{rt: rt, deps: deps, tempDir: hostTempDir(), uid: hostUID(), state: ScanState{Status: StatusIdle, RootID: -1}}
+	if u, err := deps.UserRulesStore.Load(); err != nil {
+		a.rulesLoadErr = err.Error()
+	} else {
+		a.userRules = u
+	}
 	a.rebuildRules()
 	return a
 }
@@ -145,6 +165,33 @@ func (a *App) Info() Info {
 
 // EventPayloads is never called by the frontend; it exists only for type generation.
 func (a *App) EventPayloads() EventPayloads { return EventPayloads{} }
+
+// UserRules returns the user's rules, the file holding them and why that file failed to load, if it did.
+func (a *App) UserRules() UserRulesInfo {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return UserRulesInfo{Rules: toUserRules(a.userRules), Path: a.deps.UserRulesStore.Path(), LoadError: a.rulesLoadErr}
+}
+
+// SetUserRules validates and normalizes r, saves it and applies it to the current tree at once; on failure nothing changes.
+func (a *App) SetUserRules(r UserRules) error {
+	u := advice.UserRules(r)
+	if err := userrules.Validate(u); err != nil {
+		return err
+	}
+	u = userrules.Normalize(u)
+	a.mu.Lock()
+	if err := a.deps.UserRulesStore.Save(u); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.userRules = u
+	a.rulesLoadErr = ""
+	a.rebuildRules()
+	a.mu.Unlock()
+	a.rt.EventsEmit(EventRulesChanged, RulesChangedEvent{})
+	return nil
+}
 
 // ListVolumes returns the scannable volumes.
 func (a *App) ListVolumes() ([]Volume, error) {
