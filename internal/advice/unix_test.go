@@ -173,7 +173,7 @@ func TestDarwinPrivateAliases(t *testing.T) {
 			{path: "/private/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
 			{path: "/var/folders/ab/cd/C/x", want: recommended(advice.Cache)},
 			{path: "/private/var/folders/ab/cd/C/x", want: recommended(advice.Cache)},
-			{path: "/var/folders/ab/cd/T", want: none},
+			{path: "/var/folders/ab/cd/T", want: protected(advice.System)},
 			{path: "/private/var/folders/ab/cd/T", want: protected(advice.System)},
 		})
 	})
@@ -208,5 +208,70 @@ func TestDarwinPrivateAliases(t *testing.T) {
 		runCases(t, advice.New(c), []classifyCase{
 			{path: "/private/var/folders/ab/cd/T/x", want: none},
 		})
+	})
+}
+
+// On darwin /private/var and /private/etc are System subtrees, so under either spelling everything a deeper
+// anchor does not cover is protected, while deeper content and volume anchors still win.
+func TestDarwinPrivateSubtrees(t *testing.T) {
+	c := advice.Config{
+		GOOS:        "darwin",
+		Home:        "/Users/u",
+		TempDir:     "/private/var/folders/ab/cd/T",
+		UID:         "501",
+		Mountpoints: []string{"/", "/private/var/vm"},
+		Getenv:      env(nil),
+	}
+	t.Run("darwin", func(t *testing.T) {
+		runCases(t, advice.New(c), []classifyCase{
+			{path: "/var/db/x", want: protected(advice.System)},
+			{path: "/etc/hosts", want: protected(advice.System)},
+			{path: "/var/log/x", want: protected(advice.System)},
+			{path: "/var/folders/ab/cd", want: protected(advice.System)},
+			{path: "/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
+			{path: "/private/var/folders/ab/cd/T/x", want: recommended(advice.Temp)},
+			{path: "/var/folders/ab/cd/C/x", want: recommended(advice.Cache)},
+			{path: "/var/vm", want: protected(advice.Volume)},
+			{path: "/private/var/vm", want: protected(advice.Volume)},
+			{path: "/var", want: protected(advice.System)},
+			{path: "/etc", want: protected(advice.System)},
+			{path: "/private", want: protected(advice.System)},
+			{path: "/private/var", want: protected(advice.System)},
+			{path: "/private/etc", want: protected(advice.System)},
+			{path: "/tmp", want: protected(advice.System)},
+			{path: "/tmp/x", want: recommended(advice.Temp)},
+			{path: "/Users/u/x", want: none},
+		})
+	})
+	t.Run("linux has no /private subtrees", func(t *testing.T) {
+		cc := c
+		cc.GOOS = "linux"
+		runCases(t, advice.New(cc), []classifyCase{
+			{path: "/var/db/x", want: none},
+			{path: "/var/lib/x", want: protected(advice.System)},
+			{path: "/private/var/db/x", want: none},
+			{path: "/var/vm", want: none},
+			{path: "/private/var/vm", want: protected(advice.Volume)},
+		})
+	})
+}
+
+// privateAlias mirrors only /var, /tmp and /etc themselves and their contents: a sibling whose name merely
+// shares the prefix gets no alias in either direction.
+func TestDarwinAliasBoundary(t *testing.T) {
+	c := darwinConfig()
+	c.User = advice.UserRules{
+		Protected:   []string{"/variable/x", "/private/etcd/keep"},
+		Recommended: []string{"/tmpfs/data", "/private/vartmp/data"},
+	}
+	runCases(t, advice.New(c), []classifyCase{
+		{path: "/tmpfs/data/x", want: recommended(advice.Custom)},
+		{path: "/private/tmpfs/data/x", want: protected(advice.System)}, // the /private subtree, not the user rule
+		{path: "/variable/x", want: protected(advice.Custom)},
+		{path: "/private/variable/x", want: protected(advice.System)},
+		{path: "/private/vartmp/data/x", want: recommended(advice.Custom)},
+		{path: "/vartmp/data/x", want: none},
+		{path: "/private/etcd/keep/x", want: protected(advice.Custom)},
+		{path: "/etcd/keep/x", want: none},
 	})
 }
