@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { app } from '../../wailsjs/go/models'
-  import { t } from '../lib/i18n'
+  import { formatCount } from '../lib/format'
+  import { getLocale, t } from '../lib/i18n'
+  import CleanupPanel from './CleanupPanel.svelte'
   import ErrorsPanel from './ErrorsPanel.svelte'
   import TopList from './TopList.svelte'
   import TypesPanel from './TypesPanel.svelte'
@@ -8,24 +10,27 @@
   interface Props {
     topFiles: app.Entry[] | null
     topDirs: app.Entry[] | null
+    cleanup: app.CleanupReport | null
     extensions: app.ExtReport | null
     errors: app.ScanError[] | null
     dark: boolean
     selectedID: number
     onPickFile: (e: app.Entry) => void
     onPickDir: (e: app.Entry) => void
+    onCleanAll: () => void
   }
-  let { topFiles, topDirs, extensions, errors, dark, selectedID, onPickFile, onPickDir }: Props = $props()
+  let { topFiles, topDirs, cleanup, extensions, errors, dark, selectedID, onPickFile, onPickDir, onCleanAll }: Props =
+    $props()
 
-  type Tab = 'files' | 'dirs' | 'types' | 'errors'
+  type Tab = 'files' | 'dirs' | 'cleanup' | 'types' | 'errors'
   let tab = $state<Tab>('files')
-  const tabs: Tab[] = ['files', 'dirs', 'types', 'errors']
+  const tabs: Tab[] = ['files', 'dirs', 'cleanup', 'types', 'errors']
 </script>
 
 <div
   class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
 >
-  <div class="flex shrink-0 gap-1 border-b border-zinc-200 px-2 pt-1.5 dark:border-zinc-800" role="tablist">
+  <div class="flex shrink-0 flex-wrap gap-1 border-b border-zinc-200 px-2 pt-1.5 dark:border-zinc-800" role="tablist">
     {#each tabs as id (id)}
       <button
         type="button"
@@ -37,7 +42,13 @@
         onclick={() => (tab = id)}
       >
         {t('results.tabs.' + id)}
-        {#if id === 'errors' && errors && errors.length > 0}
+        {#if id === 'cleanup' && cleanup && cleanup.Count > 0}
+          <span
+            class="rounded-full bg-emerald-100 px-1.5 text-[10px] leading-4 text-emerald-700 tabular-nums dark:bg-emerald-950 dark:text-emerald-300"
+          >
+            {formatCount(cleanup.Count, getLocale())}
+          </span>
+        {:else if id === 'errors' && errors && errors.length > 0}
           <span
             class="rounded-full bg-red-100 px-1.5 text-[10px] leading-4 text-red-700 tabular-nums dark:bg-red-950 dark:text-red-300"
           >
@@ -52,6 +63,13 @@
       <TopList entries={topFiles} {selectedID} onPick={onPickFile} />
     {:else if tab === 'dirs'}
       <TopList entries={topDirs} {selectedID} hint={t('results.dominanceHint')} onPick={onPickDir} />
+    {:else if tab === 'cleanup'}
+      <CleanupPanel
+        report={cleanup}
+        {selectedID}
+        onPick={(e) => (e.IsDir ? onPickDir(e) : onPickFile(e))}
+        {onCleanAll}
+      />
     {:else if tab === 'types'}
       <TypesPanel report={extensions} {dark} />
     {:else}
