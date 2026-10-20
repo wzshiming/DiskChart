@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { adviceKey, reasonKey, asAdvice, type Reason } from './advice'
-import { dictionaries } from './i18n'
+import { adviceKey, reasonKey, asAdvice, adviceLabel, type Reason } from './advice'
+import { dictionaries, type Locale } from './i18n'
 
 const reasons: Reason[] = [
   'root', 'volume', 'home', 'system', 'userdata', 'contains',
@@ -63,5 +63,42 @@ describe('dictionary coverage', () => {
   it.each(locales)('%s defines every adviceKey and reasonKey result', (l) => {
     const missing = keys.filter((k) => !(k in dictionaries[l]))
     expect(missing).toEqual([])
+  })
+})
+
+describe('adviceLabel', () => {
+  // Wraps every key, '' included, so a t('') call would surface as a truthy '<>'.
+  const t = (key: string) => `<${key}>`
+
+  const noAdvice: [string, string | undefined, string][] = [
+    ['an empty advice', '', 'system'],
+    ['an unknown advice', 'bogus', 'system'],
+    ['an undefined advice', undefined, 'cache'],
+  ]
+
+  it.each(noAdvice)('returns "" for %s even when a reason is given', (_label, a, r) => {
+    expect(adviceLabel(a, r, t)).toBe('')
+  })
+
+  it('joins the advice and reason texts with " · "', () => {
+    expect(adviceLabel('protected', 'system', t)).toBe('<advice.protected> · <advice.reason.system>')
+  })
+
+  it('returns only the advice text for an empty reason without calling t with ""', () => {
+    expect(adviceLabel('recommended', '', t)).toBe('<advice.recommended>')
+  })
+
+  it('returns only the advice text for a reason outside the Reason set', () => {
+    expect(adviceLabel('recommended', 'nope', t)).toBe('<advice.recommended>')
+  })
+
+  const rendered: [Locale, string][] = [
+    ['zh', '禁止删除 · 系统目录'],
+    ['en', 'Protected · System folder'],
+  ]
+
+  it.each(rendered)('renders protected/system through the %s dictionary', (l, want) => {
+    const tr = (k: string) => dictionaries[l][k] ?? k
+    expect(adviceLabel('protected', 'system', tr)).toBe(want)
   })
 })
