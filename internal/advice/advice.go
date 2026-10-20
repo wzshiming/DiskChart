@@ -51,7 +51,10 @@ type UserRules struct {
 
 // Config describes the host the rules are compiled for; non-absolute paths are ignored.
 type Config struct {
-	GOOS        string              // selects the platform table; darwin and windows compare case-insensitively
+	// GOOS selects the platform table and should equal the host's runtime.GOOS: path syntax follows
+	// the host's filepath, so absolute-path checks are unreliable when compiling another GOOS's table.
+	// darwin and windows compare case-insensitively.
+	GOOS        string
 	Home        string              // home directory; "" drops every ~ anchor
 	TempDir     string              // temporary directory
 	UID         string              // user id text (numeric on Unix, SID on Windows); "" drops per-volume trash anchors
@@ -234,31 +237,42 @@ type builder struct {
 	getenv func(string) string
 }
 
-// add anchors reason with kind k at every absolute path in paths; "" and relative paths are skipped.
+// add anchors reason with kind k at every absolute path in paths; "" and relative paths are skipped,
+// as is a content anchor at a volume root, which would recommend the whole volume.
 func (b *builder) add(k kind, reason Reason, paths ...string) {
 	for _, p := range paths {
-		if p = abs(p); p == "" {
+		if p = abs(p); p == "" || (k == content && filepath.Dir(p) == p) {
 			continue
 		}
-		n := b.insert(p)
-		switch k {
-		case point:
-			raise(&n.self, reason)
-		case subtree:
-			raise(&n.self, reason)
-			raise(&n.subtree, reason)
-		case content:
-			if n.content == "" {
-				n.content = reason
+		if b.fold {
+			p = strings.ToLower(p)
+		}
+		b.anchor(k, reason, p)
+		if b.goos == "darwin" {
+			if a := privateAlias(p); a != "" {
+				b.anchor(k, reason, a)
 			}
 		}
 	}
 }
 
-func (b *builder) insert(p string) *node {
-	if b.fold {
-		p = strings.ToLower(p)
+// anchor records reason with kind k at the node of the cleaned, folded absolute path p.
+func (b *builder) anchor(k kind, reason Reason, p string) {
+	n := b.insert(p)
+	switch k {
+	case point:
+		raise(&n.self, reason)
+	case subtree:
+		raise(&n.self, reason)
+		raise(&n.subtree, reason)
+	case content:
+		if n.content == "" {
+			n.content = reason
+		}
 	}
+}
+
+func (b *builder) insert(p string) *node {
 	sep := string(filepath.Separator)
 	vol := filepath.VolumeName(p)
 	n := b.root.child(vol)

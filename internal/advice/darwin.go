@@ -1,6 +1,9 @@
 package advice
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // darwin registers the macOS anchors.
 func (b *builder) darwin() {
@@ -40,4 +43,24 @@ func (b *builder) darwin() {
 			b.add(content, Trash, filepath.Join(m, ".Trashes", b.uid))
 		}
 	}
+}
+
+// privateAlias returns the other spelling of a path at or beneath /var, /tmp or /etc, which macOS
+// symlinks into /private, so scans rooted on either side hit the same anchors; "" for other paths.
+func privateAlias(p string) string {
+	const private = "/private"
+	for _, d := range [...]string{"/var", "/tmp", "/etc"} {
+		switch {
+		case within(p, private+d):
+			return p[len(private):]
+		case within(p, d):
+			return private + p
+		}
+	}
+	return ""
+}
+
+// within reports whether p equals dir or lies beneath it.
+func within(p, dir string) bool {
+	return strings.HasPrefix(p, dir) && (len(p) == len(dir) || p[len(dir)] == '/')
 }
