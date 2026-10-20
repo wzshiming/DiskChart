@@ -12,8 +12,12 @@ const requiredKeys = [
   'results.dominanceHint', 'results.aggregate', 'results.empty', 'results.chartType', 'results.location',
   'aggregate.hint', 'aggregate.loaded', 'aggregate.loadMore',
   'detail.size', 'detail.sizeOnDisk', 'detail.apparentSize', 'detail.files', 'detail.modified', 'detail.path',
-  'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete',
-  'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed',
+  'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete', 'detail.protected', 'detail.recommended',
+  'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed', 'delete.recommended',
+  'advice.protected', 'advice.recommended',
+  'advice.reason.root', 'advice.reason.volume', 'advice.reason.home', 'advice.reason.system',
+  'advice.reason.userdata', 'advice.reason.contains', 'advice.reason.cache', 'advice.reason.temp',
+  'advice.reason.trash', 'advice.reason.logs', 'advice.reason.rebuildable', 'advice.reason.custom',
   'common.back', 'common.close', 'common.loading', 'common.error',
   'prefs.unit', 'prefs.unitSi', 'prefs.unitIec', 'prefs.language',
   'types.images', 'types.video', 'types.audio', 'types.archives', 'types.code', 'types.documents', 'types.apps',
@@ -56,6 +60,12 @@ describe('dictionaries', () => {
     expect(body).toContain('{path}')
     expect(body).toContain('{size}')
     expect(body).toContain('{files}')
+  })
+
+  it.each(locales)('%s detail.protected, detail.recommended and delete.recommended contain {reason}', (l) => {
+    const missing = ['detail.protected', 'detail.recommended', 'delete.recommended']
+      .filter((k) => !dictionaries[l][k]?.includes('{reason}'))
+    expect(missing).toEqual([])
   })
 })
 
