@@ -898,6 +898,38 @@ func TestDeleteGuardProtectsHomeAndMountpoints(t *testing.T) {
 	}
 }
 
+func TestDeleteGuardCleansHomeAndMountpoints(t *testing.T) {
+	// Home and mount points may carry a trailing separator; the guard must match their clean forms.
+	home := filepath.FromSlash("/home/fake/")
+	mounts := []string{filepath.FromSlash("/mnt/fake/"), filepath.FromSlash("/mnt/clean")}
+	var g fsops.Guard
+	a, _, root, st := scanDone(t, Deps{
+		Home:        home,
+		Mountpoints: func(context.Context) ([]string, error) { return mounts, nil },
+		Delete:      func(guard fsops.Guard, _ string) error { g = guard; return nil },
+	})
+	f := child(t, a, st.RootID, "r.txt")
+	if _, err := a.Delete(f.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if g.Protected == nil {
+		t.Fatal("Guard.Protected = nil, want a predicate protecting Home and mount points")
+	}
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{filepath.FromSlash("/home/fake"), true},
+		{filepath.FromSlash("/mnt/fake"), true},
+		{filepath.FromSlash("/mnt/clean"), true},
+		{filepath.Join(root, "r.txt"), false},
+	} {
+		if got := g.Protected(tc.path); got != tc.want {
+			t.Errorf("Guard.Protected(%q) = %v, want %v with Home %q and mount points %q", tc.path, got, tc.want, home, mounts)
+		}
+	}
+}
+
 func TestStateConcurrentDuringScan(t *testing.T) {
 	a, _, _ := startBlocked(t, nil)
 	var wg sync.WaitGroup
