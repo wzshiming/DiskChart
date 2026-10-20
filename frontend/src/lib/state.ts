@@ -1,4 +1,5 @@
 import type { app } from '../../wailsjs/go/models'
+import type { Advice } from './advice'
 
 export type Phase = 'start' | 'scanning' | 'results'
 
@@ -10,6 +11,8 @@ export interface Item {
   isDir: boolean
   fileCount: number
   modTime: number
+  advice: Advice
+  reason: string
 }
 
 export interface UiState {

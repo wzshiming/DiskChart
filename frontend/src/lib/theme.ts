@@ -21,6 +21,8 @@ export interface ChartTheme {
   tooltipBg: string
   tooltipBorder: string
   tooltipText: string
+  protected: string
+  recommended: string
 }
 
 export function chartTheme(dark: boolean): ChartTheme {
@@ -34,6 +36,8 @@ export function chartTheme(dark: boolean): ChartTheme {
         tooltipBg: '#27272a',
         tooltipBorder: '#3f3f46',
         tooltipText: '#f4f4f5',
+        protected: '#f87171',
+        recommended: '#34d399',
       }
     : {
         palette: ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#f97316', '#84cc16', '#d946ef', '#14b8a6'],
@@ -44,6 +48,8 @@ export function chartTheme(dark: boolean): ChartTheme {
         tooltipBg: '#ffffff',
         tooltipBorder: '#e4e4e7',
         tooltipText: '#18181b',
+        protected: '#dc2626',
+        recommended: '#059669',
       }
 }
 
