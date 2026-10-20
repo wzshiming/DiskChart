@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -373,7 +375,11 @@ func (a *App) Delete(id int32) (DeleteResult, error) {
 		return DeleteResult{}, ErrRootDelete
 	}
 	p := t.Path(scan.ID(id))
-	g := fsops.Guard{Mountpoints: a.mountpoints, Home: a.deps.Home}
+	mps, home := a.mountpoints, a.deps.Home
+	g := fsops.Guard{Protected: func(path string) bool {
+		return slices.ContainsFunc(mps, func(m string) bool { return filepath.Clean(m) == path }) ||
+			(home != "" && path == filepath.Clean(home))
+	}}
 	if err := a.deps.Delete(g, p); err != nil {
 		if !errors.Is(err, fsops.ErrRefused) {
 			a.state.TreeStale = true
