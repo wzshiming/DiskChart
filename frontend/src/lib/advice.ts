@@ -42,7 +42,11 @@ export function reasonKey(r?: string): string {
   return r !== undefined && reasons.has(r) ? 'advice.reason.' + r : ''
 }
 
-// Compact one-line label, e.g. "Protected · System folder"; empty when there is no advice.
+// Compact one-line label, e.g. "Protected · System folder". Without advice it is '' regardless of
+// the reason; without a known reason only the advice word remains.
 export function adviceLabel(a: string | undefined, r: string | undefined, t: (key: string) => string): string {
-  return [t(adviceKey(a)), t(reasonKey(r))].filter(Boolean).join(' · ')
+  const advice = adviceKey(a)
+  if (!advice) return ''
+  const reason = reasonKey(r)
+  return [t(advice), reason ? t(reason) : ''].filter(Boolean).join(' · ')
 }
