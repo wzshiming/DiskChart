@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import type { app } from '../../wailsjs/go/models'
+  import { asAdvice } from '../lib/advice'
   import { api } from '../lib/api'
   import type { TreemapDatum } from '../lib/chart'
   import { t } from '../lib/i18n'
@@ -96,6 +97,8 @@
       isDir: true,
       fileCount: view.FileCount,
       modTime: 0,
+      advice: asAdvice(view.Advice),
+      reason: view.Reason ?? '',
     }
   })
 
@@ -122,6 +125,8 @@
       isDir: false,
       fileCount: 0,
       modTime: entry?.ModTime ?? 0,
+      advice: d.advice,
+      reason: d.reason,
     })
   }
 
@@ -134,6 +139,8 @@
       isDir: false,
       fileCount: 0,
       modTime: e.ModTime,
+      advice: asAdvice(e.Advice),
+      reason: e.Reason ?? '',
     }
     onSelect(item)
     api.crumbs(e.ID)
@@ -217,12 +224,7 @@
         onPickFile={pickFile}
         onPickDir={(e) => onNavigate(e.ID)}
       />
-      <DetailPanel
-        item={detail}
-        {path}
-        isRoot={detail?.id === ui.rootID}
-        onDelete={() => (deleting = detail)}
-      />
+      <DetailPanel item={detail} {path} onDelete={() => (deleting = detail)} />
     </aside>
   </div>
 </div>

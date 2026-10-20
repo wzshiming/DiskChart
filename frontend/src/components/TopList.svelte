@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { app } from '../../wailsjs/go/models'
+  import { adviceLabel, asAdvice } from '../lib/advice'
   import { formatBytes } from '../lib/format'
   import { t } from '../lib/i18n'
   import { getUnit } from '../lib/prefs.svelte'
+  import Icon from './ui/Icon.svelte'
 
   interface Props {
     entries: app.Entry[] | null
@@ -25,6 +27,7 @@
   {/if}
   <ol class="py-1">
     {#each entries as e, i (e.ID)}
+      {@const advice = asAdvice(e.Advice)}
       <li>
         <button
           type="button"
@@ -45,6 +48,19 @@
               ></span>
             </span>
           </span>
+          {#if advice}
+            {@const label = adviceLabel(advice, e.Reason, t)}
+            <span
+              role="img"
+              class="shrink-0 {advice === 'protected'
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-emerald-600 dark:text-emerald-400'}"
+              title={label}
+              aria-label={label}
+            >
+              <Icon name={advice === 'protected' ? 'lock' : 'sparkles'} class="size-3.5" />
+            </span>
+          {/if}
           <span class="shrink-0 text-xs font-medium tabular-nums">{formatBytes(e.Size, getUnit())}</span>
         </button>
       </li>

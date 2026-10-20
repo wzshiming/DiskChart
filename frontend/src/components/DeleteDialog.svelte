@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reasonKey } from '../lib/advice'
   import { api } from '../lib/api'
   import { formatBytes, formatCount } from '../lib/format'
   import { getLocale, t } from '../lib/i18n'
@@ -71,6 +72,11 @@
         files: formatCount(files, getLocale()),
       })}
     </p>
+    {#if item.advice === 'recommended'}
+      <p class="mt-2 text-sm text-emerald-600 dark:text-emerald-400">
+        {t('delete.recommended', { reason: t(reasonKey(item.reason)) })}
+      </p>
+    {/if}
     {#if error}
       <p class="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs break-all text-red-700 dark:bg-red-950/50 dark:text-red-300">
         <span class="font-medium">{t('delete.failed')}</span>: {error}

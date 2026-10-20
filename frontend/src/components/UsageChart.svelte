@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import type { EChartsCoreOption } from 'echarts/core'
   import type { app } from '../../wailsjs/go/models'
+  import { adviceLabel } from '../lib/advice'
   import { toTreemapData, type TreemapDatum } from '../lib/chart'
   import { echarts, escapeHTML, type EChartsType } from '../lib/echarts'
   import { formatBytes, formatCount, formatPercent, type Unit } from '../lib/format'
@@ -27,6 +28,10 @@
   let el = $state<HTMLDivElement>()
   let chart = $state.raw<EChartsType>()
 
+  function adviceColor(d: TreemapDatum, th: ChartTheme): string | null {
+    return d.advice === 'protected' ? th.protected : d.advice === 'recommended' ? th.recommended : null
+  }
+
   function decorate(nodes: TreemapDatum[], th: ChartTheme, border: string | null, parent?: string): object[] {
     return nodes.map((d, i) => {
       const o: Record<string, unknown> = { ...d }
@@ -36,7 +41,7 @@
         : parent
           ? mixColor(parent, '#000000', 0.1 + (i % 4) * 0.07)
           : th.palette[i % th.palette.length]
-      o.itemStyle = { color: c, borderColor: border ?? c }
+      o.itemStyle = { color: c, borderColor: adviceColor(d, th) ?? border ?? c }
       if (d.children) o.children = decorate(d.children, th, border, c)
       return o
     })
@@ -73,6 +78,8 @@
           `${t('detail.size')}: ${size(d.value)} · ${formatPercent(d.value, v.Size)}`,
         ]
         if (d.isDir || d.aggregate) lines.push(`${t('detail.files')}: ${formatCount(d.fileCount, locale)}`)
+        const color = adviceColor(d, th)
+        if (color) lines.push(`<span style="color:${color}">${escapeHTML(adviceLabel(d.advice, d.reason, t))}</span>`)
         return lines.join('<br>')
       },
     }

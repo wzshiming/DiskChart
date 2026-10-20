@@ -41,6 +41,8 @@ export namespace app {
 	    IsDir: boolean;
 	    FileCount: number;
 	    ModTime: number;
+	    Advice: string;
+	    Reason: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
@@ -56,6 +58,8 @@ export namespace app {
 	        this.IsDir = source["IsDir"];
 	        this.FileCount = source["FileCount"];
 	        this.ModTime = source["ModTime"];
+	        this.Advice = source["Advice"];
+	        this.Reason = source["Reason"];
 	    }
 	}
 	export class TreeChangedEvent {
@@ -335,6 +339,8 @@ export namespace app {
 	    Aggregate: boolean;
 	    Count: number;
 	    Skip: number;
+	    Advice: string;
+	    Reason: string;
 	    Children: View[];
 	
 	    static createFrom(source: any = {}) {
@@ -352,6 +358,8 @@ export namespace app {
 	        this.Aggregate = source["Aggregate"];
 	        this.Count = source["Count"];
 	        this.Skip = source["Skip"];
+	        this.Advice = source["Advice"];
+	        this.Reason = source["Reason"];
 	        this.Children = this.convertValues(source["Children"], View);
 	    }
 	
