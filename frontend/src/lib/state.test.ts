@@ -31,7 +31,7 @@ const results: UiState = {
 
 const scanning: UiState = { ...initialState, phase: 'scanning', root: '/r', status: 'scanning', revision: 2 }
 
-const item: Item = { id: 7, name: 'f.txt', size: 10, apparent: 21, isDir: false, fileCount: 0, modTime: 1 }
+const item: Item = { id: 7, name: 'f.txt', size: 10, apparent: 21, isDir: false, fileCount: 0, modTime: 1, advice: '', reason: '' }
 
 function run(s: UiState, e: UiEvent): UiState {
   const before = structuredClone(s)
@@ -149,6 +149,12 @@ describe('reduce', () => {
   it('select sets the selected item', () => {
     const next = run(results, { type: 'select', item })
     expect(next).toEqual({ ...results, selected: item })
+  })
+
+  it('select keeps the advice and reason of the item', () => {
+    const protectedItem: Item = { ...item, advice: 'protected', reason: 'root' }
+    const next = run(results, { type: 'select', item: protectedItem })
+    expect(next.selected).toEqual(protectedItem)
   })
 
   it('select with null clears the selected item', () => {
