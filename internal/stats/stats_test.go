@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wzshiming/DiskChart/internal/scan"
 	"github.com/wzshiming/DiskChart/internal/stats"
+	"github.com/wzshiming/DiskChart/internal/volumes"
 )
 
 // unit is one 4 KiB block: whole units of random data occupy exactly their length on APFS, ext4 and NTFS.
@@ -865,6 +867,66 @@ func TestCollectPathEqualsTreePath(t *testing.T) {
 	}
 	if len(rec.calls) != tree.Len() {
 		t.Errorf("Collect(never) called keep %d times, want Tree.Len() = %d", len(rec.calls), tree.Len())
+	}
+}
+
+// TestCollectVolumeRootPaths scans the volume root, the one root whose name already ends with a Separator.
+func TestCollectVolumeRootPaths(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.VolumeName(wd) + string(filepath.Separator)
+	mps, _ := volumes.Mountpoints(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	tree, err := scan.Scan(ctx, root, scan.Options{SameDevice: true, ExcludeMountpoints: mps}, nil)
+	if tree == nil {
+		t.Skipf("Scan(%q) returned no tree: %v", root, err)
+	}
+	t.Logf("Scan(%q): %d live nodes, err %v", root, tree.Len(), err)
+
+	sep := string(filepath.Separator)
+	rec := &collectRecorder{keep: collectNever}
+	stats.Collect(tree, 0, rec.Keep)
+	children := map[scan.ID]bool{} // the root's direct children
+	grandchildren := 0
+	for _, call := range rec.calls {
+		id := call.node.ID
+		switch {
+		case id == tree.Root():
+			if call.path != root {
+				t.Fatalf("Collect keep path for the root = %q, want %q", call.path, root)
+			}
+		case call.node.Parent == tree.Root():
+			children[id] = true
+			if strings.Contains(call.path, sep+sep) {
+				t.Fatalf("Collect keep path for the root's child %q = %q, want no doubled separator", call.node.Name, call.path)
+			}
+		case children[call.node.Parent]:
+			grandchildren++
+		}
+		if want := tree.Path(id); call.path != want {
+			t.Fatalf("Collect keep path for ID %d = %q, want Tree.Path %q", id, call.path, want)
+		}
+	}
+	if len(rec.calls) != tree.Len() {
+		t.Errorf("Collect(never) called keep %d times, want Tree.Len() = %d", len(rec.calls), tree.Len())
+	}
+	if grandchildren == 0 {
+		t.Skipf("Scan(%q) reached no grandchild of the root before the timeout", root)
+	}
+
+	// RelPath is sliced off the root's path, so only nodes below the root's children can show a wrong cut.
+	c := stats.Collect(tree, 0, func(_ string, n scan.Node) bool { return children[n.Parent] })
+	if c.Count != int64(grandchildren) || len(c.Entries) != grandchildren {
+		t.Errorf("Collect(grandchildren) Count %d with %d Entries, want %d", c.Count, len(c.Entries), grandchildren)
+	}
+	for _, e := range c.Entries {
+		path := tree.Path(e.ID)
+		if want, ok := strings.CutPrefix(path, root); !ok || e.RelPath != want {
+			t.Fatalf("Collect(grandchildren) RelPath for %q = %q, want %q", path, e.RelPath, want)
+		}
 	}
 }
 
