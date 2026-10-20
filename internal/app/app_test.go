@@ -6,12 +6,17 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"os/user"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/wzshiming/DiskChart/internal/advice"
 	"github.com/wzshiming/DiskChart/internal/fsops"
 	"github.com/wzshiming/DiskChart/internal/scan"
 	"github.com/wzshiming/DiskChart/internal/volumes"
@@ -84,6 +89,13 @@ func waitFinished(t *testing.T, a *App, rt *fakeRuntime) ScanState {
 func scanDone(t *testing.T, deps Deps) (*App, *fakeRuntime, string, ScanState) {
 	t.Helper()
 	root := fixture(t)
+	a, rt, st := advScanRoot(t, root, deps)
+	return a, rt, root, st
+}
+
+// advScanRoot runs the default (real) scan over root with deps and waits for it to finish.
+func advScanRoot(t *testing.T, root string, deps Deps) (*App, *fakeRuntime, ScanState) {
+	t.Helper()
 	rt := newFakeRuntime()
 	if deps.Mountpoints == nil {
 		deps.Mountpoints = noMounts
@@ -96,7 +108,89 @@ func scanDone(t *testing.T, deps Deps) (*App, *fakeRuntime, string, ScanState) {
 	if st.Status != StatusDone {
 		t.Fatalf("Status = %q (err %q), want %q", st.Status, st.Error, StatusDone)
 	}
+	return a, rt, st
+}
+
+// adviceFixture is fixture plus home/node_modules/f=50 (Size 1357, FileCount 5, DirCount 4); Children(root) is b, a, home, r.txt.
+func adviceFixture(t *testing.T) string {
+	t.Helper()
+	root := fixture(t)
+	writeFile(t, filepath.Join(root, "home", "node_modules", "f"), 50)
+	return root
+}
+
+// advRules compiles only the common table around home, so a fixture under the host's temp dir is never
+// classified by the host's own rules: home is protected, home/node_modules and its contents are recommended.
+func advRules(home string, u advice.UserRules) *advice.Rules {
+	return advice.New(advice.Config{GOOS: "test", Home: home, Getenv: func(string) string { return "" }, User: u})
+}
+
+// advHermetic is a Deps.Rules that ignores the host config and builds advRules(home, u).
+func advHermetic(home string, u advice.UserRules) func(advice.Config) *advice.Rules {
+	return func(advice.Config) *advice.Rules { return advRules(home, u) }
+}
+
+// advDone scans a fresh adviceFixture under hermetic rules without user rules.
+func advDone(t *testing.T) (*App, *fakeRuntime, string, ScanState) {
+	t.Helper()
+	root := adviceFixture(t)
+	a, rt, st := advScanRoot(t, root, Deps{Rules: advHermetic(filepath.Join(root, "home"), advice.UserRules{})})
 	return a, rt, root, st
+}
+
+// adv is the advice pair carried by Entry and View.
+type adv struct{ Advice, Reason string }
+
+var (
+	advNone        = adv{}
+	advRoot        = adv{"protected", "root"}
+	advHome        = adv{"protected", "home"}
+	advRebuildable = adv{"recommended", "rebuildable"}
+)
+
+func advOfEntry(e Entry) adv { return adv{e.Advice, e.Reason} }
+
+func advOfView(v View) adv { return adv{v.Advice, v.Reason} }
+
+// advEntry returns the entry of es named name, failing the test when there is none.
+func advEntry(t *testing.T, what string, es []Entry, name string) Entry {
+	t.Helper()
+	for _, e := range es {
+		if e.Name == name {
+			return e
+		}
+	}
+	t.Fatalf("%s = %+v, want an entry named %q", what, es, name)
+	return Entry{}
+}
+
+// advView returns the non-aggregate view of vs named name, failing the test when there is none.
+func advView(t *testing.T, what string, vs []View, name string) View {
+	t.Helper()
+	for _, v := range vs {
+		if v.Name == name && !v.Aggregate {
+			return v
+		}
+	}
+	t.Fatalf("%s = %+v, want a child named %q", what, vs, name)
+	return View{}
+}
+
+// advWalk returns every entry beneath id, depth-first in display order.
+func advWalk(t *testing.T, a *App, id int32) []Entry {
+	t.Helper()
+	es, err := a.Children(id, 0, maxChildrenPage)
+	if err != nil {
+		t.Fatalf("Children(%d): %v", id, err)
+	}
+	var out []Entry
+	for _, e := range es {
+		out = append(out, e)
+		if e.IsDir {
+			out = append(out, advWalk(t, a, e.ID)...)
+		}
+	}
+	return out
 }
 
 func child(t *testing.T, a *App, parent int32, name string) View {
@@ -872,8 +966,9 @@ func TestDeleteRefusedKeepsTreeFresh(t *testing.T) {
 }
 
 func TestDeleteGuardProtectsHomeAndMountpoints(t *testing.T) {
-	// Native separators: Guard.Protected is only ever asked about clean paths.
-	home, mount := filepath.FromSlash("/home/fake"), filepath.FromSlash("/mnt/fake")
+	// Host-absolute paths: the rules drop anchors that are not absolute here, and Guard.Protected is only ever asked about clean paths.
+	host := t.TempDir()
+	home, mount := filepath.Join(host, "home"), filepath.Join(host, "mnt")
 	var g fsops.Guard
 	var gotPath string
 	a, _, root, st := scanDone(t, Deps{
@@ -900,8 +995,9 @@ func TestDeleteGuardProtectsHomeAndMountpoints(t *testing.T) {
 
 func TestDeleteGuardCleansHomeAndMountpoints(t *testing.T) {
 	// Home and mount points may carry a trailing separator; the guard must match their clean forms.
-	home := filepath.FromSlash("/home/fake/")
-	mounts := []string{filepath.FromSlash("/mnt/fake/"), filepath.FromSlash("/mnt/clean")}
+	host, sep := t.TempDir(), string(filepath.Separator)
+	home := filepath.Join(host, "home") + sep
+	mounts := []string{filepath.Join(host, "mnt") + sep, filepath.Join(host, "clean")}
 	var g fsops.Guard
 	a, _, root, st := scanDone(t, Deps{
 		Home:        home,
@@ -919,9 +1015,9 @@ func TestDeleteGuardCleansHomeAndMountpoints(t *testing.T) {
 		path string
 		want bool
 	}{
-		{filepath.FromSlash("/home/fake"), true},
-		{filepath.FromSlash("/mnt/fake"), true},
-		{filepath.FromSlash("/mnt/clean"), true},
+		{filepath.Join(host, "home"), true},
+		{filepath.Join(host, "mnt"), true},
+		{filepath.Join(host, "clean"), true},
 		{filepath.Join(root, "r.txt"), false},
 	} {
 		if got := g.Protected(tc.path); got != tc.want {
@@ -937,4 +1033,410 @@ func TestStateConcurrentDuringScan(t *testing.T) {
 		wg.Go(func() { _ = a.State() })
 	}
 	wg.Wait()
+}
+
+func TestAdviceInChildren(t *testing.T) {
+	a, _, _, st := advDone(t)
+	es, err := a.Children(st.RootID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(root): %v", err)
+	}
+	want := map[string]adv{"b": advNone, "a": advNone, "home": advHome, "r.txt": advNone}
+	if len(es) != len(want) {
+		t.Fatalf("Children(root) = %+v, want b, a, home, r.txt", es)
+	}
+	for _, e := range es {
+		if got := advOfEntry(e); got != want[e.Name] {
+			t.Errorf("Children(root) %q advice = %+v, want %+v", e.Name, got, want[e.Name])
+		}
+	}
+	home := advEntry(t, "Children(root)", es, "home")
+	es, err = a.Children(home.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(home): %v", err)
+	}
+	nm := advEntry(t, "Children(home)", es, "node_modules")
+	if got := advOfEntry(nm); got != advRebuildable {
+		t.Errorf("Children(home) node_modules advice = %+v, want %+v", got, advRebuildable)
+	}
+	es, err = a.Children(nm.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(node_modules): %v", err)
+	}
+	if f := advEntry(t, "Children(node_modules)", es, "f"); advOfEntry(f) != advRebuildable {
+		t.Errorf("Children(node_modules) f advice = %+v, want %+v", advOfEntry(f), advRebuildable)
+	}
+}
+
+func TestAdviceInSubtree(t *testing.T) {
+	a, _, _, st := advDone(t)
+	v, err := a.Subtree(st.RootID, 2, 10, 0)
+	if err != nil {
+		t.Fatalf("Subtree(root, 2, 10, 0): %v", err)
+	}
+	if got := advOfView(v); got != advRoot {
+		t.Errorf("Subtree(root) advice = %+v, want %+v", got, advRoot)
+	}
+	home := advView(t, "Subtree(root).Children", v.Children, "home")
+	if got := advOfView(home); got != advHome {
+		t.Errorf("Subtree(root) home advice = %+v, want %+v", got, advHome)
+	}
+	nm := advView(t, "Subtree(root) home.Children", home.Children, "node_modules")
+	if got := advOfView(nm); got != advRebuildable {
+		t.Errorf("Subtree(root) home/node_modules advice = %+v, want %+v", got, advRebuildable)
+	}
+	if hv, err := a.Subtree(home.ID, 0, 0, 0); err != nil || advOfView(hv) != advHome {
+		t.Errorf("Subtree(home, 0, 0, 0) advice = %+v, %v, want %+v", advOfView(hv), err, advHome)
+	}
+	v, err = a.Subtree(st.RootID, 1, 2, 0)
+	if err != nil {
+		t.Fatalf("Subtree(root, 1, 2, 0): %v", err)
+	}
+	i := slices.IndexFunc(v.Children, func(c View) bool { return c.Aggregate })
+	if i < 0 {
+		t.Fatalf("Subtree(root, 1, 2, 0).Children = %+v, want an aggregate", v.Children)
+	}
+	if got := advOfView(v.Children[i]); got != advNone {
+		t.Errorf("aggregate advice = %+v, want empty Advice and Reason", got)
+	}
+}
+
+func TestAdviceInTopLists(t *testing.T) {
+	a, _, _, _ := advDone(t)
+	fs, err := a.TopFiles(10)
+	if err != nil {
+		t.Fatalf("TopFiles(10): %v", err)
+	}
+	if f := advEntry(t, "TopFiles(10)", fs, "f"); advOfEntry(f) != advRebuildable {
+		t.Errorf("TopFiles(10) f advice = %+v, want %+v", advOfEntry(f), advRebuildable)
+	}
+	if f3 := advEntry(t, "TopFiles(10)", fs, "f3"); advOfEntry(f3) != advNone {
+		t.Errorf("TopFiles(10) f3 advice = %+v, want empty", advOfEntry(f3))
+	}
+	ds, err := a.TopDirs(10)
+	if err != nil {
+		t.Fatalf("TopDirs(10): %v", err)
+	}
+	if nm := advEntry(t, "TopDirs(10)", ds, "node_modules"); advOfEntry(nm) != advRebuildable {
+		t.Errorf("TopDirs(10) node_modules advice = %+v, want %+v", advOfEntry(nm), advRebuildable)
+	}
+}
+
+func TestAdviceConsistentAcrossEndpoints(t *testing.T) {
+	a, _, _, st := advDone(t)
+	home := child(t, a, st.RootID, "home")
+	es, err := a.Children(home.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(home): %v", err)
+	}
+	ds, err := a.TopDirs(10)
+	if err != nil {
+		t.Fatalf("TopDirs(10): %v", err)
+	}
+	r, err := a.Cleanup(10)
+	if err != nil {
+		t.Fatalf("Cleanup(10): %v", err)
+	}
+	got := map[string]adv{
+		"Children": advOfEntry(advEntry(t, "Children(home)", es, "node_modules")),
+		"Subtree":  advOfView(child(t, a, home.ID, "node_modules")),
+		"TopDirs":  advOfEntry(advEntry(t, "TopDirs(10)", ds, "node_modules")),
+		"Cleanup":  advOfEntry(advEntry(t, "Cleanup(10).Entries", r.Entries, "node_modules")),
+	}
+	for k, v := range got {
+		if v != got["Children"] {
+			t.Errorf("node_modules advice from %s = %+v, want %+v as from Children (all: %v)", k, v, got["Children"], got)
+		}
+	}
+}
+
+func TestDeleteProtectedRefused(t *testing.T) {
+	a, rt, root, st := advDone(t)
+	home := child(t, a, st.RootID, "home")
+	if _, err := a.Delete(home.ID); !errors.Is(err, fsops.ErrRefused) {
+		t.Fatalf("Delete(home) error = %v, want fsops.ErrRefused", err)
+	}
+	if a.State().TreeStale {
+		t.Error("TreeStale = true after refused delete, want false")
+	}
+	if n := len(rt.eventsNamed(EventTreeChanged)); n != 0 {
+		t.Errorf("tree:changed emitted %d times after refused delete, want 0", n)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "home", "node_modules", "f")); err != nil {
+		t.Errorf("home/node_modules/f after refused delete: %v, want still on disk", err)
+	}
+	if v, err := a.Subtree(st.RootID, 0, 0, 0); err != nil || v.Size != st.Summary.Size {
+		t.Errorf("Subtree(root) Size = %d, %v, want unchanged %d", v.Size, err, st.Summary.Size)
+	}
+}
+
+func TestProtectedEntriesNeverDeletable(t *testing.T) {
+	root := adviceFixture(t)
+	u := advice.UserRules{Protected: []string{filepath.Join(root, "b")}}
+	a, _, st := advScanRoot(t, root, Deps{Rules: advHermetic(filepath.Join(root, "home"), u)})
+	before := advWalk(t, a, st.RootID)
+	var prot []Entry
+	var rels []string
+	for _, e := range before {
+		if e.Advice == "protected" {
+			prot = append(prot, e)
+			rels = append(rels, e.RelPath)
+		}
+	}
+	slices.Sort(rels)
+	if want := []string{"b", filepath.Join("b", "f3"), "home"}; !slices.Equal(rels, want) {
+		t.Fatalf("entries with Advice protected = %v, want %v", rels, want)
+	}
+	for _, e := range prot {
+		if _, err := a.Delete(e.ID); !errors.Is(err, fsops.ErrRefused) {
+			t.Errorf("Delete(%s) error = %v, want fsops.ErrRefused", e.RelPath, err)
+		}
+	}
+	if _, err := a.Delete(st.RootID); !errors.Is(err, ErrRootDelete) {
+		t.Errorf("Delete(root) error = %v, want ErrRootDelete", err)
+	}
+	after := advWalk(t, a, st.RootID)
+	if v, err := a.Subtree(st.RootID, 0, 0, 0); err != nil || v.Size != st.Summary.Size || len(after) != len(before) {
+		t.Errorf("after refused deletes root Size = %d with %d nodes, %v; want Size %d with %d nodes", v.Size, len(after), err, st.Summary.Size, len(before))
+	}
+}
+
+func TestDeleteRecommendedSucceeds(t *testing.T) {
+	a, rt, root, st := advDone(t)
+	home := child(t, a, st.RootID, "home")
+	nm := child(t, a, home.ID, "node_modules")
+	res, err := a.Delete(nm.ID)
+	if err != nil {
+		t.Fatalf("Delete(node_modules): %v", err)
+	}
+	if want := (DeleteResult{ParentID: home.ID, RemovedSize: 50 * unit, RemovedFiles: 1, RemovedDirs: 1}); res != want {
+		t.Errorf("DeleteResult = %+v, want %+v", res, want)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "home", "node_modules")); !os.IsNotExist(err) {
+		t.Errorf("home/node_modules still on disk: %v", err)
+	}
+	if n := len(rt.eventsNamed(EventTreeChanged)); n != 1 {
+		t.Errorf("tree:changed emitted %d times, want 1", n)
+	}
+	r, err := a.Cleanup(10)
+	if err != nil {
+		t.Fatalf("Cleanup(10) after deleting node_modules: %v", err)
+	}
+	if r.Total != 0 || r.Count != 0 || r.Entries == nil || len(r.Entries) != 0 {
+		t.Errorf("Cleanup(10) after deleting node_modules = %+v, want Total 0, Count 0, non-nil empty Entries", r)
+	}
+}
+
+func TestCleanupReport(t *testing.T) {
+	a, _, _, _ := advDone(t)
+	r, err := a.Cleanup(10)
+	if err != nil {
+		t.Fatalf("Cleanup(10): %v", err)
+	}
+	if r.Count != 1 || r.Total != 50*unit || len(r.Entries) != 1 {
+		t.Fatalf("Cleanup(10) = %+v, want Count 1, Total %d, one entry", r, 50*unit)
+	}
+	e, rel := r.Entries[0], filepath.Join("home", "node_modules")
+	if e.Name != "node_modules" || e.RelPath != rel || !e.IsDir || e.Size != 50*unit || advOfEntry(e) != advRebuildable {
+		t.Errorf("Cleanup(10).Entries[0] = %+v, want node_modules at %q, IsDir, Size %d, advice %+v", e, rel, 50*unit, advRebuildable)
+	}
+	for _, limit := range []int{0, -1} {
+		r, err := a.Cleanup(limit)
+		if err != nil || r.Entries == nil || len(r.Entries) != 0 || r.Count != 1 || r.Total != 50*unit {
+			t.Errorf("Cleanup(%d) = %+v, %v, want non-nil empty Entries, Count 1, Total %d", limit, r, err, 50*unit)
+		}
+	}
+	big, err := a.Cleanup(5000)
+	if err != nil {
+		t.Fatalf("Cleanup(5000): %v", err)
+	}
+	if capped, err := a.Cleanup(1000); err != nil || !reflect.DeepEqual(big, capped) {
+		t.Errorf("Cleanup(5000) = %+v, want Cleanup(1000) = %+v, %v", big, capped, err)
+	}
+}
+
+func TestCleanupTopmostAndOrdered(t *testing.T) {
+	root := adviceFixture(t)
+	u := advice.UserRules{Names: []string{"a"}}
+	a, _, _ := advScanRoot(t, root, Deps{Rules: advHermetic(filepath.Join(root, "home"), u)})
+	r, err := a.Cleanup(10)
+	if err != nil {
+		t.Fatalf("Cleanup(10): %v", err)
+	}
+	if r.Count != 2 || r.Total != 350*unit || len(r.Entries) != 2 {
+		t.Fatalf("Cleanup(10) = %+v, want Count 2, Total %d, entries a and node_modules", r, 350*unit)
+	}
+	custom := adv{"recommended", "custom"}
+	if x, y := r.Entries[0], r.Entries[1]; x.Name != "a" || advOfEntry(x) != custom || y.Name != "node_modules" || advOfEntry(y) != advRebuildable {
+		t.Errorf("Cleanup(10).Entries = %+v, want a (%+v) then node_modules (%+v)", r.Entries, custom, advRebuildable)
+	}
+	var sum int64
+	for i, e := range r.Entries {
+		sum += e.Size
+		for j, o := range r.Entries {
+			if i != j && strings.HasPrefix(o.RelPath, e.RelPath+string(filepath.Separator)) {
+				t.Errorf("Cleanup(10) reports %q beneath %q, want topmost matches only", o.RelPath, e.RelPath)
+			}
+		}
+	}
+	if sum != r.Total {
+		t.Errorf("Cleanup(10) entries sum to %d, want Total %d", sum, r.Total)
+	}
+	if r1, err := a.Cleanup(1); err != nil || len(r1.Entries) != 1 || r1.Entries[0].Name != "a" || r1.Count != 2 || r1.Total != 350*unit {
+		t.Errorf("Cleanup(1) = %+v, %v, want Entries [a], Count 2, Total %d", r1, err, 350*unit)
+	}
+}
+
+func TestCleanupWithoutTree(t *testing.T) {
+	root := adviceFixture(t)
+	rules := advHermetic(filepath.Join(root, "home"), advice.UserRules{})
+	if _, err := New(newFakeRuntime(), Deps{Rules: rules}).Cleanup(10); !errors.Is(err, ErrNoTree) {
+		t.Errorf("Cleanup(10) before any scan error = %v, want ErrNoTree", err)
+	}
+	tree := fixtureTree(t, root)
+	rt := newFakeRuntime()
+	a := New(rt, Deps{Scan: blockingScan(tree), Mountpoints: noMounts, Rules: rules})
+	if err := a.StartScan(root, ScanOptions{}); err != nil {
+		t.Fatalf("StartScan: %v", err)
+	}
+	if _, err := a.Cleanup(10); !errors.Is(err, ErrNoTree) {
+		t.Errorf("Cleanup(10) while scanning error = %v, want ErrNoTree", err)
+	}
+	if err := a.CancelScan(); err != nil {
+		t.Fatalf("CancelScan: %v", err)
+	}
+	if st := waitFinished(t, a, rt); st.Status != StatusCancelled {
+		t.Fatalf("Status after cancel = %q, want cancelled", st.Status)
+	}
+	if _, err := a.Cleanup(10); err != nil {
+		t.Errorf("Cleanup(10) over the cancelled scan's tree error = %v, want nil", err)
+	}
+}
+
+func TestCleanupFollowsRulesRebuild(t *testing.T) {
+	root := adviceFixture(t)
+	var mu sync.Mutex
+	var names []string
+	rules := func(advice.Config) *advice.Rules {
+		mu.Lock()
+		defer mu.Unlock()
+		return advRules(filepath.Join(root, "home"), advice.UserRules{Names: names})
+	}
+	a, _, st := advScanRoot(t, root, Deps{Rules: rules})
+	if r, err := a.Cleanup(10); err != nil || r.Count != 1 {
+		t.Fatalf("Cleanup(10) = %+v, %v, want Count 1", r, err)
+	}
+	mu.Lock()
+	names = []string{"b"}
+	mu.Unlock()
+	a.mu.Lock()
+	a.rebuildRules()
+	a.mu.Unlock()
+	if r, err := a.Cleanup(10); err != nil || r.Count != 2 || r.Total != 1050*unit {
+		t.Errorf("Cleanup(10) after rebuildRules = %+v, %v, want Count 2, Total %d", r, err, 1050*unit)
+	}
+	es, err := a.Children(st.RootID, 0, 10)
+	if err != nil {
+		t.Fatalf("Children(root): %v", err)
+	}
+	if b, want := advEntry(t, "Children(root)", es, "b"), (adv{"recommended", "custom"}); advOfEntry(b) != want {
+		t.Errorf("Children(root) b advice after rebuildRules = %+v, want %+v", advOfEntry(b), want)
+	}
+}
+
+func TestCleanupCached(t *testing.T) {
+	a, _, root, st := advDone(t)
+	cached := func() *CleanupReport {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.cleanup
+	}
+	if got := cached(); got != nil {
+		t.Fatalf("a.cleanup = %+v after scan, want nil before the first Cleanup", got)
+	}
+	if _, err := a.Cleanup(10); err != nil {
+		t.Fatalf("Cleanup(10): %v", err)
+	}
+	first := cached()
+	if first == nil {
+		t.Fatal("a.cleanup = nil after Cleanup(10), want the cached report")
+	}
+	if _, err := a.Cleanup(5); err != nil {
+		t.Fatalf("Cleanup(5): %v", err)
+	}
+	if got := cached(); got != first {
+		t.Errorf("a.cleanup = %p after Cleanup(5), want the same report %p", got, first)
+	}
+
+	f := child(t, a, st.RootID, "r.txt")
+	if _, err := a.Delete(f.ID); err != nil {
+		t.Fatalf("Delete(r.txt): %v", err)
+	}
+	if got := cached(); got != nil {
+		t.Errorf("a.cleanup = %p after a successful Delete, want nil", got)
+	}
+
+	if _, err := a.Cleanup(10); err != nil {
+		t.Fatalf("Cleanup(10) after Delete: %v", err)
+	}
+	a.mu.Lock()
+	a.rebuildRules()
+	a.mu.Unlock()
+	if got := cached(); got != nil {
+		t.Errorf("a.cleanup = %p after rebuildRules, want nil", got)
+	}
+
+	if _, err := a.Cleanup(10); err != nil {
+		t.Fatalf("Cleanup(10) after rebuildRules: %v", err)
+	}
+	if err := a.StartScan(root, ScanOptions{}); err != nil {
+		t.Fatalf("second StartScan: %v", err)
+	}
+	got := cached()
+	waitState(t, a)
+	if got != nil {
+		t.Errorf("a.cleanup = %p after StartScan, want nil", got)
+	}
+}
+
+func TestRulesConfigFromHost(t *testing.T) {
+	home, mount := filepath.FromSlash("/home/fake"), filepath.FromSlash("/mnt/fake")
+	var mu sync.Mutex
+	var cfgs []advice.Config
+	scanDone(t, Deps{
+		Home:        home,
+		Mountpoints: func(context.Context) ([]string, error) { return []string{mount}, nil },
+		Rules: func(c advice.Config) *advice.Rules {
+			mu.Lock()
+			cfgs = append(cfgs, c)
+			mu.Unlock()
+			return advice.New(c)
+		},
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(cfgs) != 2 {
+		t.Fatalf("Deps.Rules called %d times over New and one scan, want 2 (New, then StartScan)", len(cfgs))
+	}
+	if len(cfgs[0].Mountpoints) != 0 {
+		t.Errorf("Deps.Rules config from New has Mountpoints %v, want none", cfgs[0].Mountpoints)
+	}
+	c := cfgs[1]
+	if !slices.Equal(c.Mountpoints, []string{mount}) {
+		t.Errorf("Deps.Rules config from StartScan has Mountpoints %v, want %v", c.Mountpoints, []string{mount})
+	}
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		tmp = filepath.Clean(os.TempDir())
+	}
+	uid := ""
+	if u, err := user.Current(); err == nil {
+		uid = u.Uid
+	}
+	if c.GOOS != runtime.GOOS || c.Home != home || c.TempDir != tmp || tmp == "" || c.UID != uid || c.Getenv == nil {
+		t.Errorf("Deps.Rules config = %+v, want GOOS %q, Home %q, TempDir %q, UID %q and a non-nil Getenv", c, runtime.GOOS, home, tmp, uid)
+	}
+	if len(c.User.Protected)+len(c.User.Recommended)+len(c.User.Names) != 0 {
+		t.Errorf("Deps.Rules config User = %+v, want zero UserRules", c.User)
+	}
 }
