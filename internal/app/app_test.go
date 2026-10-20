@@ -1287,6 +1287,30 @@ func TestCleanupTopmostAndOrdered(t *testing.T) {
 	}
 }
 
+// The scan root is protected even when the rules would recommend it, so Cleanup reports its contents instead.
+func TestCleanupExcludesRecommendedRoot(t *testing.T) {
+	home := filepath.Join(adviceFixture(t), "home")
+	a, _, st := advScanRoot(t, filepath.Join(home, "node_modules"), Deps{Rules: advHermetic(home, advice.UserRules{})})
+	if v, err := a.Subtree(st.RootID, 0, 0, 0); err != nil || advOfView(v) != advRoot {
+		t.Errorf("Subtree(root, 0, 0, 0) advice = %+v, %v, want %+v", advOfView(v), err, advRoot)
+	}
+	r, err := a.Cleanup(10)
+	if err != nil {
+		t.Fatalf("Cleanup(10): %v", err)
+	}
+	if r.Count != 1 || r.Total != 50*unit || len(r.Entries) != 1 {
+		t.Fatalf("Cleanup(10) over a recommended root = %+v, want Count 1, Total %d, one entry", r, 50*unit)
+	}
+	if e := r.Entries[0]; e.Name != "f" || e.RelPath != "f" || advOfEntry(e) != advRebuildable {
+		t.Errorf("Cleanup(10).Entries[0] = %+v, want f at RelPath %q with advice %+v, not the root", e, "f", advRebuildable)
+	}
+	for _, e := range r.Entries {
+		if e.RelPath == "." || e.Advice == "protected" || e.ID == st.RootID {
+			t.Errorf("Cleanup(10) lists the scan root as %+v, want descendants only", e)
+		}
+	}
+}
+
 func TestCleanupWithoutTree(t *testing.T) {
 	root := adviceFixture(t)
 	rules := advHermetic(filepath.Join(root, "home"), advice.UserRules{})
