@@ -8,7 +8,8 @@ import (
 // darwin registers the macOS anchors.
 func (b *builder) darwin() {
 	b.add(subtree, System, "/System", "/usr", "/bin", "/sbin", "/private", "/dev", "/Library/Apple")
-	b.add(point, System, "/Library", "/Volumes", "/Users", "/etc", "/var", "/tmp")
+	b.add(subtree, System, "/private/var", "/private/etc") // already under /private; listed so privateAlias covers /var and /etc too
+	b.add(point, System, "/Library", "/Volumes", "/Users", "/tmp")
 	b.add(point, UserData,
 		b.h("Library"),
 		b.h("Library", "Application Support"),
