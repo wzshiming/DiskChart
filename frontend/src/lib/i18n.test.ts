@@ -8,12 +8,15 @@ const requiredKeys = [
   'scanning.title', 'scanning.files', 'scanning.dirs', 'scanning.bytes', 'scanning.errors', 'scanning.elapsed',
   'scanning.cancel',
   'results.partial', 'results.stale', 'results.rescan', 'results.treemap', 'results.sunburst',
-  'results.tabs.files', 'results.tabs.dirs', 'results.tabs.types', 'results.tabs.errors',
+  'results.tabs.files', 'results.tabs.dirs', 'results.tabs.types', 'results.tabs.errors', 'results.tabs.cleanup',
   'results.dominanceHint', 'results.aggregate', 'results.empty', 'results.chartType', 'results.location',
   'aggregate.hint', 'aggregate.loaded', 'aggregate.loadMore',
   'detail.size', 'detail.sizeOnDisk', 'detail.apparentSize', 'detail.files', 'detail.modified', 'detail.path',
   'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete', 'detail.protected', 'detail.recommended',
   'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed', 'delete.recommended',
+  'cleanup.summary', 'cleanup.hint', 'cleanup.empty', 'cleanup.cleanAll', 'cleanup.title', 'cleanup.body',
+  'cleanup.moreNotListed', 'cleanup.selectAll', 'cleanup.selectNone', 'cleanup.selected', 'cleanup.start',
+  'cleanup.progress', 'cleanup.cancel', 'cleanup.cancelled', 'cleanup.done', 'cleanup.failedItems',
   'advice.protected', 'advice.recommended',
   'advice.reason.root', 'advice.reason.volume', 'advice.reason.home', 'advice.reason.system',
   'advice.reason.userdata', 'advice.reason.contains', 'advice.reason.cache', 'advice.reason.temp',
@@ -66,6 +69,42 @@ describe('dictionaries', () => {
     const missing = ['detail.protected', 'detail.recommended', 'delete.recommended']
       .filter((k) => !dictionaries[l][k]?.includes('{reason}'))
     expect(missing).toEqual([])
+  })
+
+  it.each(locales)('%s cleanup.summary contains {size} and {count}', (l) => {
+    const s = dictionaries[l]['cleanup.summary']
+    expect(s).toContain('{size}')
+    expect(s).toContain('{count}')
+  })
+
+  it.each(locales)('%s cleanup.body contains {count} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.body']
+    expect(s).toContain('{count}')
+    expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s cleanup.moreNotListed contains {n}', (l) => {
+    expect(dictionaries[l]['cleanup.moreNotListed']).toContain('{n}')
+  })
+
+  it.each(locales)('%s cleanup.selected contains {count} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.selected']
+    expect(s).toContain('{count}')
+    expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s cleanup.progress contains {done}, {total} and {name}', (l) => {
+    const s = dictionaries[l]['cleanup.progress']
+    expect(s).toContain('{done}')
+    expect(s).toContain('{total}')
+    expect(s).toContain('{name}')
+  })
+
+  it.each(locales)('%s cleanup.done contains {ok}, {failed} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.done']
+    expect(s).toContain('{ok}')
+    expect(s).toContain('{failed}')
+    expect(s).toContain('{size}')
   })
 })
 
