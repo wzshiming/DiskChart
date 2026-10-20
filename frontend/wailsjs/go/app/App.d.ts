@@ -6,6 +6,8 @@ export function CancelScan():Promise<void>;
 
 export function Children(arg1:number,arg2:number,arg3:number):Promise<Array<app.Entry>>;
 
+export function Cleanup(arg1:number):Promise<app.CleanupReport>;
+
 export function CopyPath(arg1:number):Promise<void>;
 
 export function Crumbs(arg1:number):Promise<Array<app.Crumb>>;

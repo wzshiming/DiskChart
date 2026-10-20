@@ -10,6 +10,10 @@ export function Children(arg1, arg2, arg3) {
   return window['go']['app']['App']['Children'](arg1, arg2, arg3);
 }
 
+export function Cleanup(arg1) {
+  return window['go']['app']['App']['Cleanup'](arg1);
+}
+
 export function CopyPath(arg1) {
   return window['go']['app']['App']['CopyPath'](arg1);
 }

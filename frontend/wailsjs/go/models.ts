@@ -1,5 +1,69 @@
 export namespace app {
 	
+	export class Entry {
+	    ID: number;
+	    Name: string;
+	    RelPath: string;
+	    Size: number;
+	    Apparent: number;
+	    IsDir: boolean;
+	    FileCount: number;
+	    ModTime: number;
+	    Advice: string;
+	    Reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Entry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Name = source["Name"];
+	        this.RelPath = source["RelPath"];
+	        this.Size = source["Size"];
+	        this.Apparent = source["Apparent"];
+	        this.IsDir = source["IsDir"];
+	        this.FileCount = source["FileCount"];
+	        this.ModTime = source["ModTime"];
+	        this.Advice = source["Advice"];
+	        this.Reason = source["Reason"];
+	    }
+	}
+	export class CleanupReport {
+	    Total: number;
+	    Count: number;
+	    Entries: Entry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Total = source["Total"];
+	        this.Count = source["Count"];
+	        this.Entries = this.convertValues(source["Entries"], Entry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Crumb {
 	    ID: number;
 	    Name: string;
@@ -32,36 +96,7 @@ export namespace app {
 	        this.RemovedDirs = source["RemovedDirs"];
 	    }
 	}
-	export class Entry {
-	    ID: number;
-	    Name: string;
-	    RelPath: string;
-	    Size: number;
-	    Apparent: number;
-	    IsDir: boolean;
-	    FileCount: number;
-	    ModTime: number;
-	    Advice: string;
-	    Reason: string;
 	
-	    static createFrom(source: any = {}) {
-	        return new Entry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ID = source["ID"];
-	        this.Name = source["Name"];
-	        this.RelPath = source["RelPath"];
-	        this.Size = source["Size"];
-	        this.Apparent = source["Apparent"];
-	        this.IsDir = source["IsDir"];
-	        this.FileCount = source["FileCount"];
-	        this.ModTime = source["ModTime"];
-	        this.Advice = source["Advice"];
-	        this.Reason = source["Reason"];
-	    }
-	}
 	export class TreeChangedEvent {
 	    RemovedID: number;
 	    ParentID: number;

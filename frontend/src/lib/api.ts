@@ -14,6 +14,7 @@ export const api = {
   crumbs: App.Crumbs,
   topFiles: App.TopFiles,
   topDirs: App.TopDirs,
+  cleanup: App.Cleanup,
   extensions: App.Extensions,
   scanErrors: App.ScanErrors,
   nodePath: App.NodePath,
