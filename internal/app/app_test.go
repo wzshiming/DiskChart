@@ -1830,6 +1830,109 @@ func TestSetUserRulesRejectsBroadRecommended(t *testing.T) {
 	}
 }
 
+// homeApp returns an App whose Deps.Home is home, over a store that only counts its Saves.
+func homeApp(home string) (*App, *fakeRuntime, *int) {
+	saves := 0
+	rt := newFakeRuntime()
+	st := fakeStore{path: filepath.Join("fake", "rules.json"), saves: &saves}
+	return New(rt, Deps{UserRulesStore: st, Rules: advFromUser(home), Home: home}), rt, &saves
+}
+
+func TestSetUserRulesRejectsHomeAsRecommended(t *testing.T) {
+	home := filepath.Join(adviceFixture(t), "home")
+	sep := string(filepath.Separator)
+	// rejected checks that a fresh App refuses r with ErrInvalidRules reading line and keeps everything as it was.
+	rejected := func(t *testing.T, r UserRules, line string) error {
+		t.Helper()
+		a, rt, saves := homeApp(home)
+		before := a.UserRules()
+		if !reflect.DeepEqual(before.Rules, noRules()) {
+			t.Fatalf("UserRules().Rules before SetUserRules = %+v, want none", before.Rules)
+		}
+		err := a.SetUserRules(r)
+		if !errors.Is(err, userrules.ErrInvalidRules) || !strings.Contains(err.Error(), line) {
+			t.Fatalf("SetUserRules(%+v) = %v, want userrules.ErrInvalidRules reading %q", r, err, line)
+		}
+		if *saves != 0 {
+			t.Errorf("Save called %d times by a rejected SetUserRules, want 0", *saves)
+		}
+		if n := len(rt.eventsNamed(EventRulesChanged)); n != 0 {
+			t.Errorf("rules:changed emitted %d times by a rejected SetUserRules, want 0", n)
+		}
+		if got := a.UserRules(); !reflect.DeepEqual(got, before) {
+			t.Errorf("UserRules() after rejected SetUserRules = %+v, want unchanged %+v", got, before)
+		}
+		return err
+	}
+
+	type namedPath struct{ name, path string }
+	broad := []namedPath{
+		{"home itself", home},
+		{"trailing separator", home + sep},
+		{"dot dot back to home", home + sep + "x" + sep + ".."},
+		{"trailing dot", home + sep + "."},
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if up := strings.ToUpper(home); up != home {
+			broad = append(broad, namedPath{"other case", up})
+		}
+	}
+	for _, tc := range broad {
+		t.Run(tc.name, func(t *testing.T) {
+			rejected(t, UserRules{Recommended: []string{tc.path}}, "Recommended[0]: too broad: "+tc.path)
+		})
+	}
+	t.Run("index follows the submitted list", func(t *testing.T) {
+		err := rejected(t, UserRules{Recommended: []string{filepath.Join(home, "ok"), home}}, "Recommended[1]: too broad: "+home)
+		if strings.Contains(err.Error(), "Recommended[0]") {
+			t.Errorf("SetUserRules error = %q, want no line for Recommended[0]: home/ok is narrower than home", err)
+		}
+	})
+	t.Run("a directory beneath home is accepted", func(t *testing.T) {
+		a, rt, saves := homeApp(home)
+		if err := a.SetUserRules(UserRules{Recommended: []string{filepath.Join(home, "x")}}); err != nil {
+			t.Fatalf("SetUserRules(Recommended home/x) = %v, want nil", err)
+		}
+		if *saves != 1 {
+			t.Errorf("Save called %d times, want 1", *saves)
+		}
+		if n := len(rt.eventsNamed(EventRulesChanged)); n != 1 {
+			t.Errorf("rules:changed emitted %d times, want 1", n)
+		}
+	})
+}
+
+func TestSetUserRulesHomeCheckSkippedWithoutHome(t *testing.T) {
+	for _, k := range []string{"HOME", "USERPROFILE"} {
+		t.Setenv(k, "")
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		t.Skipf("clearing HOME and USERPROFILE does not make os.UserHomeDir fail on %s: %q", runtime.GOOS, h)
+	}
+	a, _, saves := homeApp("")
+	if a.deps.Home != "" {
+		t.Fatalf("Deps.Home after New = %q, want \"\" so there is no home to compare against", a.deps.Home)
+	}
+	dir := filepath.Join(t.TempDir(), "home")
+	if err := a.SetUserRules(UserRules{Recommended: []string{dir}}); err != nil {
+		t.Fatalf("SetUserRules(Recommended %q) without a home = %v, want nil", dir, err)
+	}
+	if *saves != 1 {
+		t.Errorf("Save called %d times, want 1", *saves)
+	}
+}
+
+func TestSetUserRulesAcceptsHomeAsProtected(t *testing.T) {
+	home := filepath.Join(adviceFixture(t), "home")
+	a, _, saves := homeApp(home)
+	if err := a.SetUserRules(UserRules{Protected: []string{home}}); err != nil {
+		t.Fatalf("SetUserRules(Protected home) = %v, want nil: only Recommended must stay narrower than home", err)
+	}
+	if *saves != 1 {
+		t.Errorf("Save called %d times, want 1", *saves)
+	}
+}
+
 func TestCorruptFileRecovers(t *testing.T) {
 	st := rulesStore(t)
 	if err := os.WriteFile(st.File, []byte("{"), 0o600); err != nil {
