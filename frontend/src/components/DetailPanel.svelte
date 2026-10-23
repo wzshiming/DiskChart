@@ -5,6 +5,7 @@
   import { formatBytes, formatCount, formatDate } from '../lib/format'
   import { getLocale, t } from '../lib/i18n'
   import { getUnit } from '../lib/prefs.svelte'
+  import { appendUnique } from '../lib/rules'
   import type { Item } from '../lib/state'
   import Button from './ui/Button.svelte'
   import Icon from './ui/Icon.svelte'
@@ -46,6 +47,22 @@
   }
 
   onDestroy(() => clearTimeout(timer))
+
+  function addRule(kind: 'Protected' | 'Recommended') {
+    const p = path
+    if (!p) return
+    run(async () => {
+      const info = await api.userRules()
+      const rules = {
+        Protected: info.Rules.Protected ?? [],
+        Recommended: info.Rules.Recommended ?? [],
+        Names: info.Rules.Names ?? [],
+      }
+      const list = appendUnique(rules[kind], p)
+      if (list === rules[kind]) return
+      await api.setUserRules({ ...rules, [kind]: list })
+    })
+  }
 </script>
 
 <div class="shrink-0 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
@@ -91,6 +108,22 @@
       <Button variant="secondary" size="sm" icon={copied ? 'check' : 'clipboard'} onclick={copy}>
         {copied ? t('detail.copied') : t('detail.copy')}
       </Button>
+      {#if item.advice !== 'protected'}
+        <Button variant="secondary" size="sm" icon="lock" disabled={!path} onclick={() => addRule('Protected')}>
+          {t('detail.protect')}
+        </Button>
+      {/if}
+      {#if item.isDir && item.advice !== 'recommended'}
+        <Button
+          variant="secondary"
+          size="sm"
+          icon="sparkles"
+          disabled={!path}
+          onclick={() => addRule('Recommended')}
+        >
+          {t('detail.recommend')}
+        </Button>
+      {/if}
       <Button
         variant="danger-outline"
         size="sm"

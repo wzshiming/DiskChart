@@ -21,6 +21,8 @@ export const api = {
   reveal: App.Reveal,
   copyPath: App.CopyPath,
   delete: App.Delete,
+  userRules: App.UserRules,
+  setUserRules: App.SetUserRules,
 }
 
 export function onScanProgress(cb: (p: app.Progress) => void): () => void {
@@ -33,4 +35,8 @@ export function onScanFinished(cb: (e: app.FinishedEvent) => void): () => void {
 
 export function onTreeChanged(cb: (e: app.TreeChangedEvent) => void): () => void {
   return EventsOn('tree:changed', cb)
+}
+
+export function onRulesChanged(cb: (e: app.RulesChangedEvent) => void): () => void {
+  return EventsOn('rules:changed', cb)
 }

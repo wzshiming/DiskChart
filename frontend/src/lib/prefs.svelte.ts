@@ -55,6 +55,10 @@ export function setPlatform(p: string): void {
   platform = p
 }
 
+export function getPlatform(): string {
+  return platform
+}
+
 export function getLocale(): Locale {
   return locale
 }

@@ -18,8 +18,9 @@
     summary?: { size: string; files: string } | null
     onNavigate: (id: number) => void
     onBack: () => void
+    onRules: () => void
   }
-  let { phase, root, crumbs, partial, summary = null, onNavigate, onBack }: Props = $props()
+  let { phase, root, crumbs, partial, summary = null, onNavigate, onBack, onRules }: Props = $props()
 
   const chip =
     'inline-flex h-7 items-center rounded-full px-2.5 text-xs text-zinc-500 tabular-nums ring-1 ring-zinc-200 ring-inset dark:text-zinc-400 dark:ring-zinc-800'
@@ -64,6 +65,14 @@
   {/if}
 
   <div class="flex shrink-0 items-center gap-1.5">
+    <Button
+      variant="ghost"
+      size="sm"
+      icon="cog"
+      ariaLabel={t('rules.title')}
+      title={t('rules.title')}
+      onclick={onRules}
+    />
     <Segmented
       options={[
         { value: 'si', label: 'KB', title: t('prefs.unitSi') },

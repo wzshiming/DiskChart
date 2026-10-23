@@ -136,6 +136,12 @@ describe('reduce', () => {
     expect(next.revision).toBe(results.revision + 1)
   })
 
+  it('rulesChanged bumps revision and keeps every other field', () => {
+    const prev: UiState = { ...results, selected: item }
+    const next = run(prev, { type: 'rulesChanged' })
+    expect(next).toEqual({ ...prev, revision: prev.revision + 1 })
+  })
+
   it('navigate sets currentID and keeps revision', () => {
     const next = run(results, { type: 'navigate', id: 11 })
     expect(next).toEqual({ ...results, currentID: 11 })
