@@ -1540,16 +1540,22 @@ func (s *rulesSpy) configs() []advice.Config {
 	return slices.Clone(s.cfgs)
 }
 
-// fakeStore is a UserRulesStore that loads fixed rules and fails every Save with err.
+// fakeStore is a UserRulesStore that loads fixed rules, counts Saves in *saves when set, and fails every Save with err.
 type fakeStore struct {
 	path  string
 	rules advice.UserRules
 	err   error
+	saves *int
 }
 
 func (s fakeStore) Path() string                    { return s.path }
 func (s fakeStore) Load() (advice.UserRules, error) { return s.rules, nil }
-func (s fakeStore) Save(advice.UserRules) error     { return s.err }
+func (s fakeStore) Save(advice.UserRules) error {
+	if s.saves != nil {
+		*s.saves++
+	}
+	return s.err
+}
 
 func TestEventPayloadsIncludeRulesChanged(t *testing.T) {
 	if EventRulesChanged != "rules:changed" {
@@ -1558,6 +1564,9 @@ func TestEventPayloadsIncludeRulesChanged(t *testing.T) {
 	f, ok := reflect.TypeFor[EventPayloads]().FieldByName("RulesChanged")
 	if !ok || f.Type != reflect.TypeFor[RulesChangedEvent]() {
 		t.Fatalf("EventPayloads.RulesChanged present %v with type %v, want a RulesChangedEvent field", ok, f.Type)
+	}
+	if p, ok := reflect.TypeFor[RulesChangedEvent]().FieldByName("Path"); !ok || p.Type != reflect.TypeFor[string]() {
+		t.Errorf("RulesChangedEvent.Path present %v with type %v, want a string field holding the rules file", ok, p.Type)
 	}
 }
 
@@ -1695,8 +1704,8 @@ func TestSetUserRulesApplies(t *testing.T) {
 		t.Errorf("UserRules() = %+v, want %+v", got, exp)
 	}
 	evs := rt.eventsNamed(EventRulesChanged)
-	if len(evs) != 1 || evs[0].Data != (RulesChangedEvent{}) {
-		t.Errorf("rules:changed events = %+v, want exactly one with payload RulesChangedEvent{}", evs)
+	if len(evs) != 1 || evs[0].Data != (RulesChangedEvent{Path: st.Path()}) {
+		t.Errorf("rules:changed events = %+v, want exactly one with payload RulesChangedEvent{Path: %q}", evs, st.Path())
 	}
 	if n := len(rt.eventsNamed(EventTreeChanged)); n != 0 {
 		t.Errorf("tree:changed emitted %d times by SetUserRules, want 0", n)
@@ -1797,6 +1806,27 @@ func TestSetUserRulesSaveFails(t *testing.T) {
 	}
 	if n := len(rt.eventsNamed(EventRulesChanged)); n != 0 {
 		t.Errorf("rules:changed emitted %d times after failed Save, want 0", n)
+	}
+}
+
+func TestSetUserRulesRejectsBroadRecommended(t *testing.T) {
+	saves := 0
+	fs := fakeStore{path: filepath.Join("fake", "rules.json"), rules: advice.UserRules{Names: []string{"x"}}, saves: &saves}
+	rt := newFakeRuntime()
+	a := New(rt, Deps{UserRulesStore: fs})
+	before := a.UserRules()
+	err := a.SetUserRules(UserRules{Recommended: []string{"~"}})
+	if !errors.Is(err, userrules.ErrInvalidRules) || !strings.Contains(err.Error(), "too broad") {
+		t.Fatalf("SetUserRules(Recommended ~) = %v, want userrules.ErrInvalidRules reading too broad", err)
+	}
+	if saves != 0 {
+		t.Errorf("Save called %d times by a rejected SetUserRules, want 0", saves)
+	}
+	if n := len(rt.eventsNamed(EventRulesChanged)); n != 0 {
+		t.Errorf("rules:changed emitted %d times by a rejected SetUserRules, want 0", n)
+	}
+	if got := a.UserRules(); !reflect.DeepEqual(got, before) {
+		t.Errorf("UserRules() after rejected SetUserRules = %+v, want unchanged %+v", got, before)
 	}
 }
 
