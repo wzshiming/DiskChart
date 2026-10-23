@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
   import { app } from '../wailsjs/go/models'
-  import { api, onScanFinished, onScanProgress, onTreeChanged } from './lib/api'
+  import { asAdvice } from './lib/advice'
+  import { api, onRulesChanged, onScanFinished, onScanProgress, onTreeChanged } from './lib/api'
   import { formatBytes, formatCount } from './lib/format'
   import { getLocale } from './lib/i18n'
   import { getUnit, setPlatform } from './lib/prefs.svelte'
@@ -11,10 +12,12 @@
   import StartPage from './components/StartPage.svelte'
   import ScanningPage from './components/ScanningPage.svelte'
   import ResultsPage from './components/ResultsPage.svelte'
+  import RulesDialog from './components/RulesDialog.svelte'
 
   let ui: UiState = $state.raw(initialState)
   let dark = $state(prefersDark())
   let sameDevice = $state(true)
+  let rulesOpen = $state(false)
 
   const summary = $derived(
     ui.summary
@@ -82,11 +85,27 @@
     document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : 'en'
   })
 
+  // New rules change advice without touching the tree, so the selected item is refreshed by hand.
+  function rulesChanged() {
+    dispatch({ type: 'rulesChanged' })
+    const sel = ui.selected
+    if (!sel) return
+    api
+      .subtree(sel.id, 0, 0, 0)
+      .then((v) => {
+        const cur = ui.selected
+        if (!cur || cur.id !== v.ID) return
+        dispatch({ type: 'select', item: { ...cur, advice: asAdvice(v.Advice), reason: v.Reason ?? '' } })
+      })
+      .catch(() => {})
+  }
+
   onMount(() => {
     const offs = [
       onScanProgress((p) => dispatch({ type: 'progress', progress: p })),
       onScanFinished((e) => dispatch({ type: 'finished', event: e })),
       onTreeChanged((e) => dispatch({ type: 'treeChanged', event: e })),
+      onRulesChanged(rulesChanged),
       onDarkChange((d) => (dark = d)),
     ]
     api
@@ -107,6 +126,7 @@
     {summary}
     onNavigate={(id) => dispatch({ type: 'navigate', id })}
     onBack={() => dispatch({ type: 'reset' })}
+    onRules={() => (rulesOpen = true)}
   />
   <main class="min-h-0 flex-1">
     {#if ui.phase === 'start'}
@@ -125,3 +145,5 @@
     {/if}
   </main>
 </div>
+
+<RulesDialog open={rulesOpen} onClose={() => (rulesOpen = false)} />

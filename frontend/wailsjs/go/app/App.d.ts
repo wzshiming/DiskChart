@@ -30,6 +30,8 @@ export function Reveal(arg1:number):Promise<void>;
 
 export function ScanErrors(arg1:number):Promise<Array<app.ScanError>>;
 
+export function SetUserRules(arg1:app.UserRules):Promise<void>;
+
 export function StartScan(arg1:string,arg2:app.ScanOptions):Promise<void>;
 
 export function State():Promise<app.ScanState>;
@@ -39,3 +41,5 @@ export function Subtree(arg1:number,arg2:number,arg3:number,arg4:number):Promise
 export function TopDirs(arg1:number):Promise<Array<app.Entry>>;
 
 export function TopFiles(arg1:number):Promise<Array<app.Entry>>;
+
+export function UserRules():Promise<app.UserRulesInfo>;

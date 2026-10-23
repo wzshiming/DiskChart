@@ -58,6 +58,10 @@ export function ScanErrors(arg1) {
   return window['go']['app']['App']['ScanErrors'](arg1);
 }
 
+export function SetUserRules(arg1) {
+  return window['go']['app']['App']['SetUserRules'](arg1);
+}
+
 export function StartScan(arg1, arg2) {
   return window['go']['app']['App']['StartScan'](arg1, arg2);
 }
@@ -76,4 +80,8 @@ export function TopDirs(arg1) {
 
 export function TopFiles(arg1) {
   return window['go']['app']['App']['TopFiles'](arg1);
+}
+
+export function UserRules() {
+  return window['go']['app']['App']['UserRules']();
 }
