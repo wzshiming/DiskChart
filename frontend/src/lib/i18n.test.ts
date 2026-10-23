@@ -13,6 +13,7 @@ const requiredKeys = [
   'aggregate.hint', 'aggregate.loaded', 'aggregate.loadMore',
   'detail.size', 'detail.sizeOnDisk', 'detail.apparentSize', 'detail.files', 'detail.modified', 'detail.path',
   'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete', 'detail.protected', 'detail.recommended',
+  'detail.protect', 'detail.recommend',
   'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed', 'delete.recommended',
   'cleanup.summary', 'cleanup.hint', 'cleanup.empty', 'cleanup.cleanAll', 'cleanup.title', 'cleanup.body',
   'cleanup.moreNotListed', 'cleanup.selectAll', 'cleanup.selectNone', 'cleanup.selected', 'cleanup.start',
@@ -21,6 +22,11 @@ const requiredKeys = [
   'advice.reason.root', 'advice.reason.volume', 'advice.reason.home', 'advice.reason.system',
   'advice.reason.userdata', 'advice.reason.contains', 'advice.reason.cache', 'advice.reason.temp',
   'advice.reason.trash', 'advice.reason.logs', 'advice.reason.rebuildable', 'advice.reason.custom',
+  'rules.title', 'rules.intro', 'rules.protected', 'rules.protectedHint', 'rules.recommended',
+  'rules.recommendedHint', 'rules.names', 'rules.namesHint', 'rules.add', 'rules.remove', 'rules.pickFolder',
+  'rules.pickFolderTitle', 'rules.pathPlaceholder', 'rules.namePlaceholder', 'rules.invalidPath',
+  'rules.invalidName', 'rules.tooBroad', 'rules.storedAt', 'rules.loadError', 'rules.empty', 'rules.clearAll',
+  'rules.clearAllConfirm', 'rules.save', 'rules.saving', 'rules.saveFailed', 'rules.loadFailed', 'rules.cancel',
   'common.back', 'common.close', 'common.loading', 'common.error',
   'prefs.unit', 'prefs.unitSi', 'prefs.unitIec', 'prefs.language',
   'types.images', 'types.video', 'types.audio', 'types.archives', 'types.code', 'types.documents', 'types.apps',
@@ -105,6 +111,14 @@ describe('dictionaries', () => {
     expect(s).toContain('{ok}')
     expect(s).toContain('{failed}')
     expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s rules.storedAt contains {path}', (l) => {
+    expect(dictionaries[l]['rules.storedAt']).toContain('{path}')
+  })
+
+  it.each(locales)('%s rules.loadError contains {error}', (l) => {
+    expect(dictionaries[l]['rules.loadError']).toContain('{error}')
   })
 })
 
