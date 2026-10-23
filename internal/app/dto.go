@@ -131,7 +131,9 @@ type UserRulesInfo struct {
 }
 
 // RulesChangedEvent is the payload of EventRulesChanged, emitted after the user rules were saved and applied.
-type RulesChangedEvent struct{}
+type RulesChangedEvent struct {
+	Path string // the rules file
+}
 
 // EventPayloads exists only so Wails generates TS models for the event payloads.
 type EventPayloads struct {
