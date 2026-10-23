@@ -373,10 +373,15 @@ func TestValidateRejectsBroadRecommended(t *testing.T) {
 		{"~/", "too broad"},
 		{"~//", "too broad"},
 		{"~/.", "too broad"},
+		{"~/./", "too broad"},
+		{"~/..", "too broad"},
+		{"~/x/..", "too broad"},
+		{"~/x/../", "too broad"},
 		{hostRoot, "too broad"},
 		{hostRoot + "x", ""},
 		{"~/x", ""},
 		{"~/.cache", ""},
+		{"~/x/y/..", ""},
 	}
 	if runtime.GOOS == "windows" {
 		cases = append(cases, pathReason{`~\`, "too broad"}, pathReason{`C:\`, "too broad"}, pathReason{`\\srv\share`, "too broad"})
