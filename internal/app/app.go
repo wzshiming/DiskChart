@@ -4,11 +4,13 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -174,9 +176,13 @@ func (a *App) UserRules() UserRulesInfo {
 }
 
 // SetUserRules validates and normalizes r, saves it and applies it to the current tree at once; on failure nothing changes.
+// The home directory itself, however spelled, may not be marked as safe to clean.
 func (a *App) SetUserRules(r UserRules) error {
 	u := advice.UserRules(r)
 	if err := userrules.Validate(u); err != nil {
+		return err
+	}
+	if err := rejectHomeRecommended(a.deps.Home, u.Recommended); err != nil {
 		return err
 	}
 	u = userrules.Normalize(u)
@@ -191,6 +197,31 @@ func (a *App) SetUserRules(r UserRules) error {
 	a.mu.Unlock()
 	a.rt.EventsEmit(EventRulesChanged, RulesChangedEvent{Path: a.deps.UserRulesStore.Path()})
 	return nil
+}
+
+// rejectHomeRecommended wraps userrules.ErrInvalidRules listing, as Recommended[i]: too broad: value, every entry
+// of rec that cleans to home itself once ~ is expanded the way advice does; userrules.Validate catches only the ~
+// spelling. Paths are compared case-insensitively where the host does. nil when home is "" or no entry matches.
+func rejectHomeRecommended(home string, rec []string) error {
+	if home == "" {
+		return nil
+	}
+	home = filepath.Clean(home)
+	fold := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+	var lines []string
+	for i, raw := range rec {
+		v := strings.TrimSpace(raw)
+		if v == "~" || (len(v) > 1 && v[0] == '~' && os.IsPathSeparator(v[1])) {
+			v = filepath.Join(home, v[1:])
+		}
+		if v = filepath.Clean(v); v == home || (fold && strings.EqualFold(v, home)) {
+			lines = append(lines, fmt.Sprintf("Recommended[%d]: too broad: %s", i, raw))
+		}
+	}
+	if lines == nil {
+		return nil
+	}
+	return fmt.Errorf("%w:\n%s", userrules.ErrInvalidRules, strings.Join(lines, "\n"))
 }
 
 // ListVolumes returns the scannable volumes.
