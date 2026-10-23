@@ -27,6 +27,8 @@
   let current = $state('')
   let cancelRequested = $state(false)
   let cancelled = $state(false)
+  // onFinished/onClose have fired for this batch.
+  let finished = false
 
   const entries = $derived(report?.Entries ?? [])
   const listedSize = $derived(entries.reduce((sum, e) => sum + e.Size, 0))
@@ -44,6 +46,7 @@
     current = ''
     cancelRequested = false
     cancelled = false
+    finished = false
   }
 
   $effect(() => {
@@ -98,6 +101,18 @@
   }
 
   function closed() {
+    if (running) {
+      // A forced close mid-batch (e.g. a second Esc) counts as Cancel; keep the progress visible.
+      cancelRequested = true
+      try {
+        dlg?.showModal()
+      } catch {
+        requestAnimationFrame(() => dlg?.showModal())
+      }
+      return
+    }
+    if (finished) return
+    finished = true
     if (phase !== 'idle') onFinished(batchSummary(results))
     onClose()
   }
