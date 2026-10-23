@@ -17,6 +17,9 @@ Disk usage analyzer for macOS, Windows and Linux.
 - Top 50 largest folders with dominance filtering: when ≥ 90% of a directory's size comes from a single subdirectory, only that subdirectory is listed
 - Usage distribution by file type (extension)
 - Per file/folder: reveal in file manager, copy path, permanent delete (with confirmation)
+- Deletion advice on every file and folder: system folders, home and user data are protected from deletion; caches, temporary files, logs, trash and rebuildable artifacts are flagged as safe to clean
+- Cleanup tab: lists the topmost safe-to-clean locations with the total space they would free; review, uncheck and batch-delete them with one confirmation
+- Custom rules: mark your own paths as protected or safe to clean (gear button in the top bar, or one click from the detail panel); stored in the user config directory as `DiskChart/rules.json` and applied immediately
 - Chinese / English UI, switchable at any time (follows the system language by default)
 - Light/dark theme follows the system
 - Capacity units switchable between decimal (1 KB = 1000 B) and binary (1 KiB = 1024 B); defaults to decimal on macOS and binary elsewhere

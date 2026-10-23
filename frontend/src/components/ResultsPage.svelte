@@ -1,11 +1,15 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
-  import type { app } from '../../wailsjs/go/models'
+  import { onDestroy, untrack } from 'svelte'
+  import { app } from '../../wailsjs/go/models'
+  import { asAdvice } from '../lib/advice'
   import { api } from '../lib/api'
   import type { TreemapDatum } from '../lib/chart'
+  import type { BatchSummary } from '../lib/cleanup'
   import { t } from '../lib/i18n'
+  import { createRefresher } from '../lib/refresh'
   import type { Item, UiState } from '../lib/state'
   import AggregateDialog from './AggregateDialog.svelte'
+  import CleanupDialog from './CleanupDialog.svelte'
   import DeleteDialog from './DeleteDialog.svelte'
   import DetailPanel from './DetailPanel.svelte'
   import SidePanel from './SidePanel.svelte'
@@ -30,24 +34,29 @@
   let viewError = $state('')
   let topFiles = $state.raw<app.Entry[] | null>(null)
   let topDirs = $state.raw<app.Entry[] | null>(null)
+  let cleanup = $state.raw<app.CleanupReport | null>(null)
   let extensions = $state.raw<app.ExtReport | null>(null)
   let errors = $state.raw<app.ScanError[] | null>(null)
   let deleting = $state.raw<Item | null>(null)
+  let cleaning = $state.raw<app.CleanupReport | null>(null)
   let aggregate = $state.raw<{ parentID: number; skip: number; count: number; size: number } | null>(null)
   let pathOf = $state.raw({ id: -2, path: '' })
 
   let listError = $state('')
   const loadError = $derived(listError || (view ? viewError : ''))
 
+  const emptyCleanup = app.CleanupReport.createFrom({ Total: 0, Count: 0, Entries: [] })
+
   // ui is replaced on every update, so effects key on primitives to refetch only when these change.
   const viewKey = $derived(`${ui.currentID}:${ui.revision}`)
   const listKey = $derived(`${ui.rootID}:${ui.revision}`)
 
+  // A changed ID refetches at once; a bare revision bump is debounced so the burst of
+  // tree:changed events from a batch delete collapses into one refetch.
+  let viewID = -1
   let viewSeq = 0
-  $effect(() => {
-    void viewKey
-    aggregate = null
-    const id = untrack(() => ui.currentID)
+  const refreshView = createRefresher(() => {
+    const id = viewID
     if (id < 0) return
     const n = ++viewSeq
     api
@@ -61,19 +70,32 @@
         if (n === viewSeq) viewError = String(e)
       })
   })
-
-  let listSeq = 0
   $effect(() => {
-    void listKey
-    if (untrack(() => ui.rootID) < 0) return
+    void viewKey
+    aggregate = null
+    const id = untrack(() => ui.currentID)
+    if (id === viewID) {
+      refreshView.later()
+    } else {
+      viewID = id
+      refreshView.now()
+    }
+  })
+
+  let listRootID = -1
+  let listSeq = 0
+  const refreshList = createRefresher(() => {
+    if (listRootID < 0) return
     const n = ++listSeq
-    Promise.all([api.topFiles(100), api.topDirs(50), api.extensions(12), api.scanErrors(500)])
-      .then(([f, d, x, e]) => {
+    Promise.all([api.topFiles(100), api.topDirs(50), api.extensions(12), api.scanErrors(500), api.cleanup(100)])
+      .then(([f, d, x, e, c]) => {
         if (n !== listSeq) return
         topFiles = f ?? []
         topDirs = d ?? []
         extensions = x
         errors = e ?? []
+        c.Entries ??= []
+        cleanup = c
         listError = ''
       })
       .catch((err) => {
@@ -82,7 +104,23 @@
         topFiles = topFiles ?? []
         topDirs = topDirs ?? []
         errors = errors ?? []
+        cleanup = cleanup ?? emptyCleanup
       })
+  })
+  $effect(() => {
+    void listKey
+    const root = untrack(() => ui.rootID)
+    if (root === listRootID) {
+      refreshList.later()
+    } else {
+      listRootID = root
+      refreshList.now()
+    }
+  })
+
+  onDestroy(() => {
+    refreshView.cancel()
+    refreshList.cancel()
   })
 
   const detail = $derived.by((): Item | null => {
@@ -96,6 +134,8 @@
       isDir: true,
       fileCount: view.FileCount,
       modTime: 0,
+      advice: asAdvice(view.Advice),
+      reason: view.Reason ?? '',
     }
   })
 
@@ -122,6 +162,8 @@
       isDir: false,
       fileCount: 0,
       modTime: entry?.ModTime ?? 0,
+      advice: d.advice,
+      reason: d.reason,
     })
   }
 
@@ -134,6 +176,8 @@
       isDir: false,
       fileCount: 0,
       modTime: e.ModTime,
+      advice: asAdvice(e.Advice),
+      reason: e.Reason ?? '',
     }
     onSelect(item)
     api.crumbs(e.ID)
@@ -147,6 +191,16 @@
         }
       })
       .catch(() => {})
+  }
+
+  async function finishCleanup(s: BatchSummary) {
+    if (s.ok === 0) return
+    onSelect(null)
+    const id = ui.currentID
+    if (id === ui.rootID) return
+    // Deleting an ancestor removes the current folder without a tree:changed naming it.
+    const crumbs = await api.crumbs(id).catch(() => null)
+    if (ui.currentID === id && !crumbs?.length) onNavigate(ui.rootID)
   }
 
   const kinds: ChartKind[] = ['treemap', 'sunburst']
@@ -210,19 +264,16 @@
       <SidePanel
         {topFiles}
         {topDirs}
+        {cleanup}
         {extensions}
         {errors}
         {dark}
         selectedID={ui.selected?.id ?? -2}
         onPickFile={pickFile}
         onPickDir={(e) => onNavigate(e.ID)}
+        onCleanAll={() => (cleaning = cleanup)}
       />
-      <DetailPanel
-        item={detail}
-        {path}
-        isRoot={detail?.id === ui.rootID}
-        onDelete={() => (deleting = detail)}
-      />
+      <DetailPanel item={detail} {path} onDelete={() => (deleting = detail)} />
     </aside>
   </div>
 </div>
@@ -237,6 +288,8 @@
   }}
   {onStale}
 />
+
+<CleanupDialog report={cleaning} onClose={() => (cleaning = null)} onFinished={finishCleanup} {onStale} />
 
 <AggregateDialog
   target={aggregate}

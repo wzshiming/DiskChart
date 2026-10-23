@@ -1,19 +1,21 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
+  import { reasonKey } from '../lib/advice'
   import { api } from '../lib/api'
   import { formatBytes, formatCount, formatDate } from '../lib/format'
   import { getLocale, t } from '../lib/i18n'
   import { getUnit } from '../lib/prefs.svelte'
+  import { appendUnique } from '../lib/rules'
   import type { Item } from '../lib/state'
   import Button from './ui/Button.svelte'
+  import Icon from './ui/Icon.svelte'
 
   interface Props {
     item: Item | null
     path: string
-    isRoot: boolean
     onDelete: () => void
   }
-  let { item, path, isRoot, onDelete }: Props = $props()
+  let { item, path, onDelete }: Props = $props()
 
   let copied = $state(false)
   let error = $state('')
@@ -45,10 +47,28 @@
   }
 
   onDestroy(() => clearTimeout(timer))
+
+  function addRule(kind: 'Protected' | 'Recommended') {
+    const p = path
+    if (!p) return
+    run(async () => {
+      const info = await api.userRules()
+      const rules = {
+        Protected: info.Rules.Protected ?? [],
+        Recommended: info.Rules.Recommended ?? [],
+        Names: info.Rules.Names ?? [],
+      }
+      const list = appendUnique(rules[kind], p)
+      if (list === rules[kind]) return
+      await api.setUserRules({ ...rules, [kind]: list })
+    })
+  }
 </script>
 
 <div class="shrink-0 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
   {#if item}
+    {@const protectedText =
+      item.advice === 'protected' ? t('detail.protected', { reason: t(reasonKey(item.reason)) }) : ''}
     <div class="truncate text-sm font-semibold" title={item.name}>{item.name}</div>
     <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
       <dt class="text-zinc-500 dark:text-zinc-400">{t('detail.path')}</dt>
@@ -65,6 +85,17 @@
         <dd>{formatDate(item.modTime, getLocale())}</dd>
       {/if}
     </dl>
+    {#if item.advice === 'protected'}
+      <p class="mt-2 flex items-center gap-1 text-xs text-red-600 dark:text-red-400">
+        <Icon name="lock" class="size-3.5" />
+        <span>{protectedText}</span>
+      </p>
+    {:else if item.advice === 'recommended'}
+      <p class="mt-2 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+        <Icon name="sparkles" class="size-3.5" />
+        <span>{t('detail.recommended', { reason: t(reasonKey(item.reason)) })}</span>
+      </p>
+    {/if}
     <div class="mt-3 flex flex-wrap gap-1">
       <Button
         variant="secondary"
@@ -77,7 +108,31 @@
       <Button variant="secondary" size="sm" icon={copied ? 'check' : 'clipboard'} onclick={copy}>
         {copied ? t('detail.copied') : t('detail.copy')}
       </Button>
-      <Button variant="danger-outline" size="sm" icon="trash" class="ml-auto" disabled={isRoot} onclick={onDelete}>
+      {#if item.advice !== 'protected'}
+        <Button variant="secondary" size="sm" icon="lock" disabled={!path} onclick={() => addRule('Protected')}>
+          {t('detail.protect')}
+        </Button>
+      {/if}
+      {#if item.isDir && item.advice !== 'recommended'}
+        <Button
+          variant="secondary"
+          size="sm"
+          icon="sparkles"
+          disabled={!path}
+          onclick={() => addRule('Recommended')}
+        >
+          {t('detail.recommend')}
+        </Button>
+      {/if}
+      <Button
+        variant="danger-outline"
+        size="sm"
+        icon="trash"
+        class="ml-auto"
+        disabled={item.advice === 'protected'}
+        title={protectedText || undefined}
+        onclick={onDelete}
+      >
         {t('detail.delete')}
       </Button>
     </div>

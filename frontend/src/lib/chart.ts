@@ -1,4 +1,5 @@
 import type { app } from '../../wailsjs/go/models'
+import { asAdvice, type Advice } from './advice'
 
 export interface TreemapDatum {
   name: string
@@ -11,6 +12,8 @@ export interface TreemapDatum {
   fileCount: number
   count: number
   skip: number
+  advice: Advice
+  reason: string
   children?: TreemapDatum[]
 }
 
@@ -28,6 +31,8 @@ export function toTreemapData(view: app.View, aggregateLabel: (count: number) =>
         fileCount: c.FileCount,
         count: c.Count,
         skip: c.Skip,
+        advice: '',
+        reason: '',
       }
     }
     const datum: TreemapDatum = {
@@ -41,6 +46,8 @@ export function toTreemapData(view: app.View, aggregateLabel: (count: number) =>
       fileCount: c.FileCount,
       count: 0,
       skip: 0,
+      advice: asAdvice(c.Advice),
+      reason: c.Reason ?? '',
     }
     if (c.IsDir && c.Children && c.Children.length > 0) {
       datum.children = toTreemapData(c, aggregateLabel)

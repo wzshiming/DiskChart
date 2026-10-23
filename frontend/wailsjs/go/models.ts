@@ -1,5 +1,69 @@
 export namespace app {
 	
+	export class Entry {
+	    ID: number;
+	    Name: string;
+	    RelPath: string;
+	    Size: number;
+	    Apparent: number;
+	    IsDir: boolean;
+	    FileCount: number;
+	    ModTime: number;
+	    Advice: string;
+	    Reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Entry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Name = source["Name"];
+	        this.RelPath = source["RelPath"];
+	        this.Size = source["Size"];
+	        this.Apparent = source["Apparent"];
+	        this.IsDir = source["IsDir"];
+	        this.FileCount = source["FileCount"];
+	        this.ModTime = source["ModTime"];
+	        this.Advice = source["Advice"];
+	        this.Reason = source["Reason"];
+	    }
+	}
+	export class CleanupReport {
+	    Total: number;
+	    Count: number;
+	    Entries: Entry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Total = source["Total"];
+	        this.Count = source["Count"];
+	        this.Entries = this.convertValues(source["Entries"], Entry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Crumb {
 	    ID: number;
 	    Name: string;
@@ -32,30 +96,17 @@ export namespace app {
 	        this.RemovedDirs = source["RemovedDirs"];
 	    }
 	}
-	export class Entry {
-	    ID: number;
-	    Name: string;
-	    RelPath: string;
-	    Size: number;
-	    Apparent: number;
-	    IsDir: boolean;
-	    FileCount: number;
-	    ModTime: number;
+	
+	export class RulesChangedEvent {
+	    Path: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new Entry(source);
+	        return new RulesChangedEvent(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ID = source["ID"];
-	        this.Name = source["Name"];
-	        this.RelPath = source["RelPath"];
-	        this.Size = source["Size"];
-	        this.Apparent = source["Apparent"];
-	        this.IsDir = source["IsDir"];
-	        this.FileCount = source["FileCount"];
-	        this.ModTime = source["ModTime"];
+	        this.Path = source["Path"];
 	    }
 	}
 	export class TreeChangedEvent {
@@ -156,6 +207,7 @@ export namespace app {
 	    Progress: Progress;
 	    Finished: FinishedEvent;
 	    TreeChanged: TreeChangedEvent;
+	    RulesChanged: RulesChangedEvent;
 	
 	    static createFrom(source: any = {}) {
 	        return new EventPayloads(source);
@@ -166,6 +218,7 @@ export namespace app {
 	        this.Progress = this.convertValues(source["Progress"], Progress);
 	        this.Finished = this.convertValues(source["Finished"], FinishedEvent);
 	        this.TreeChanged = this.convertValues(source["TreeChanged"], TreeChangedEvent);
+	        this.RulesChanged = this.convertValues(source["RulesChanged"], RulesChangedEvent);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -255,6 +308,7 @@ export namespace app {
 	    }
 	}
 	
+	
 	export class ScanError {
 	    Path: string;
 	    Msg: string;
@@ -325,6 +379,56 @@ export namespace app {
 	}
 	
 	
+	export class UserRules {
+	    Protected: string[];
+	    Recommended: string[];
+	    Names: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UserRules(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Protected = source["Protected"];
+	        this.Recommended = source["Recommended"];
+	        this.Names = source["Names"];
+	    }
+	}
+	export class UserRulesInfo {
+	    Rules: UserRules;
+	    Path: string;
+	    LoadError: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UserRulesInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Rules = this.convertValues(source["Rules"], UserRules);
+	        this.Path = source["Path"];
+	        this.LoadError = source["LoadError"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class View {
 	    ID: number;
 	    Name: string;
@@ -335,6 +439,8 @@ export namespace app {
 	    Aggregate: boolean;
 	    Count: number;
 	    Skip: number;
+	    Advice: string;
+	    Reason: string;
 	    Children: View[];
 	
 	    static createFrom(source: any = {}) {
@@ -352,6 +458,8 @@ export namespace app {
 	        this.Aggregate = source["Aggregate"];
 	        this.Count = source["Count"];
 	        this.Skip = source["Skip"];
+	        this.Advice = source["Advice"];
+	        this.Reason = source["Reason"];
 	        this.Children = this.convertValues(source["Children"], View);
 	    }
 	

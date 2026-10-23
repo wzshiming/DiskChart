@@ -7,24 +7,44 @@ const aggregateLabel = (count: number) => `${count} small items`
 // Every Apparent is 2 * Size + 1, so an apparent read from Size never matches.
 const view = app.View.createFrom({
   ID: 10, Name: '/root', Size: 100, Apparent: 201, IsDir: true, FileCount: 3, Aggregate: false, Count: 0, Skip: 0,
+  Advice: 'protected', Reason: 'root',
   Children: [
     {
       ID: 1, Name: 'a', Size: 60, Apparent: 121, IsDir: true, FileCount: 2, Aggregate: false, Count: 0, Skip: 0,
-      Children: [{ ID: 3, Name: 'f', Size: 60, Apparent: 121, IsDir: false, FileCount: 0, Aggregate: false, Count: 0, Skip: 0, Children: [] }],
+      Advice: 'protected', Reason: 'system',
+      Children: [{
+        ID: 3, Name: 'f', Size: 60, Apparent: 121, IsDir: false, FileCount: 0, Aggregate: false, Count: 0, Skip: 0,
+        Advice: 'recommended', Reason: 'cache', Children: [],
+      }],
     },
-    { ID: 2, Name: 'z', Size: 0, Apparent: 1, IsDir: true, FileCount: 0, Aggregate: false, Count: 0, Skip: 0, Children: [] },
-    { ID: -1, Name: '', Size: 40, Apparent: 81, IsDir: false, FileCount: 5, Aggregate: true, Count: 7, Skip: 2, Children: [] },
+    {
+      ID: 2, Name: 'z', Size: 0, Apparent: 1, IsDir: true, FileCount: 0, Aggregate: false, Count: 0, Skip: 0,
+      Advice: '', Reason: '', Children: [],
+    },
+    {
+      ID: -1, Name: '', Size: 40, Apparent: 81, IsDir: false, FileCount: 5, Aggregate: true, Count: 7, Skip: 2,
+      Advice: '', Reason: '', Children: [],
+    },
   ],
 })
 
+// The nested aggregate carries Advice/Reason on purpose: toTreemapData must blank them.
 const nested = app.View.createFrom({
   ID: 20, Name: '/n', Size: 90, Apparent: 181, IsDir: true, FileCount: 9, Aggregate: false, Count: 0, Skip: 0,
+  Advice: 'protected', Reason: 'root',
   Children: [
     {
       ID: 21, Name: 'sub', Size: 90, Apparent: 181, IsDir: true, FileCount: 9, Aggregate: false, Count: 0, Skip: 0,
+      Advice: 'recommended', Reason: 'logs',
       Children: [
-        { ID: 22, Name: 'big', Size: 50, Apparent: 101, IsDir: false, FileCount: 0, Aggregate: false, Count: 0, Skip: 0, Children: [] },
-        { ID: -1, Name: '', Size: 40, Apparent: 81, IsDir: false, FileCount: 8, Aggregate: true, Count: 8, Skip: 1, Children: [] },
+        {
+          ID: 22, Name: 'big', Size: 50, Apparent: 101, IsDir: false, FileCount: 0, Aggregate: false, Count: 0, Skip: 0,
+          Advice: 'recommended', Reason: 'rebuildable', Children: [],
+        },
+        {
+          ID: -1, Name: '', Size: 40, Apparent: 81, IsDir: false, FileCount: 8, Aggregate: true, Count: 8, Skip: 1,
+          Advice: 'protected', Reason: 'contains', Children: [],
+        },
       ],
     },
   ],
@@ -39,9 +59,13 @@ describe('toTreemapData', () => {
 
   it('maps a non-empty directory with recursive children', () => {
     const [dir] = toTreemapData(view, aggregateLabel)
-    expect(dir).toMatchObject({ name: 'a', value: 60, id: 1, isDir: true, aggregate: false, fileCount: 2, count: 0 })
+    expect(dir).toMatchObject({
+      name: 'a', value: 60, id: 1, isDir: true, aggregate: false, fileCount: 2, count: 0, advice: 'protected', reason: 'system',
+    })
     expect(dir.children).toHaveLength(1)
-    expect(dir.children![0]).toMatchObject({ name: 'f', value: 60, id: 3, isDir: false, aggregate: false, fileCount: 0, count: 0 })
+    expect(dir.children![0]).toMatchObject({
+      name: 'f', value: 60, id: 3, isDir: false, aggregate: false, fileCount: 0, count: 0, advice: 'recommended', reason: 'cache',
+    })
   })
 
   it('omits the children key on a file', () => {
@@ -53,6 +77,7 @@ describe('toTreemapData', () => {
     const empty = toTreemapData(view, aggregateLabel)[1]
     expect(empty).toEqual({
       name: 'z', value: 0, apparent: 1, id: 2, parentID: 10, isDir: true, aggregate: false, fileCount: 0, count: 0, skip: 0,
+      advice: '', reason: '',
     })
     expect('children' in empty).toBe(false)
   })
@@ -61,7 +86,7 @@ describe('toTreemapData', () => {
     const agg = toTreemapData(view, aggregateLabel)[2]
     expect(agg).toEqual({
       name: aggregateLabel(7), value: 40, apparent: 81, id: -1, parentID: 10, isDir: false, aggregate: true, fileCount: 5,
-      count: 7, skip: 2,
+      count: 7, skip: 2, advice: '', reason: '',
     })
     expect('children' in agg).toBe(false)
   })
@@ -80,8 +105,34 @@ describe('toTreemapData', () => {
     const agg = toTreemapData(nested, aggregateLabel)[0].children![1]
     expect(agg).toEqual({
       name: aggregateLabel(8), value: 40, apparent: 81, id: -1, parentID: 21, isDir: false, aggregate: true, fileCount: 8,
-      count: 8, skip: 1,
+      count: 8, skip: 1, advice: '', reason: '',
     })
+  })
+
+  it('takes advice and reason of ordinary items from their View fields, descendants included', () => {
+    const [dir] = toTreemapData(view, aggregateLabel)
+    expect([dir.advice, dir.reason]).toEqual(['protected', 'system'])
+    expect([dir.children![0].advice, dir.children![0].reason]).toEqual(['recommended', 'cache'])
+    const big = toTreemapData(nested, aggregateLabel)[0].children![0]
+    expect([big.advice, big.reason]).toEqual(['recommended', 'rebuildable'])
+  })
+
+  it('blanks advice and reason on an aggregate item even when its View carries them', () => {
+    const agg = toTreemapData(nested, aggregateLabel)[0].children![1]
+    expect([agg.advice, agg.reason]).toEqual(['', ''])
+  })
+
+  it('narrows an unknown Advice value to "" and keeps the reason', () => {
+    const odd = app.View.createFrom({
+      ID: 30, Name: '/o', Size: 1, Apparent: 3, IsDir: true, FileCount: 1, Aggregate: false, Count: 0, Skip: 0,
+      Advice: '', Reason: '',
+      Children: [{
+        ID: 31, Name: 'w', Size: 1, Apparent: 3, IsDir: false, FileCount: 0, Aggregate: false, Count: 0, Skip: 0,
+        Advice: 'weird', Reason: 'cache', Children: [],
+      }],
+    })
+    const [w] = toTreemapData(odd, aggregateLabel)
+    expect([w.advice, w.reason]).toEqual(['', 'cache'])
   })
 
   it('takes apparent of ordinary items from their View.Apparent', () => {

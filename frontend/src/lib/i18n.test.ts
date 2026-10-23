@@ -8,12 +8,25 @@ const requiredKeys = [
   'scanning.title', 'scanning.files', 'scanning.dirs', 'scanning.bytes', 'scanning.errors', 'scanning.elapsed',
   'scanning.cancel',
   'results.partial', 'results.stale', 'results.rescan', 'results.treemap', 'results.sunburst',
-  'results.tabs.files', 'results.tabs.dirs', 'results.tabs.types', 'results.tabs.errors',
+  'results.tabs.files', 'results.tabs.dirs', 'results.tabs.types', 'results.tabs.errors', 'results.tabs.cleanup',
   'results.dominanceHint', 'results.aggregate', 'results.empty', 'results.chartType', 'results.location',
   'aggregate.hint', 'aggregate.loaded', 'aggregate.loadMore',
   'detail.size', 'detail.sizeOnDisk', 'detail.apparentSize', 'detail.files', 'detail.modified', 'detail.path',
-  'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete',
-  'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed',
+  'detail.reveal', 'detail.copy', 'detail.copied', 'detail.delete', 'detail.protected', 'detail.recommended',
+  'detail.protect', 'detail.recommend',
+  'delete.title', 'delete.body', 'delete.confirm', 'delete.cancel', 'delete.failed', 'delete.recommended',
+  'cleanup.summary', 'cleanup.hint', 'cleanup.empty', 'cleanup.cleanAll', 'cleanup.title', 'cleanup.body',
+  'cleanup.moreNotListed', 'cleanup.selectAll', 'cleanup.selectNone', 'cleanup.selected', 'cleanup.start',
+  'cleanup.progress', 'cleanup.cancel', 'cleanup.cancelled', 'cleanup.done', 'cleanup.failedItems',
+  'advice.protected', 'advice.recommended',
+  'advice.reason.root', 'advice.reason.volume', 'advice.reason.home', 'advice.reason.system',
+  'advice.reason.userdata', 'advice.reason.contains', 'advice.reason.cache', 'advice.reason.temp',
+  'advice.reason.trash', 'advice.reason.logs', 'advice.reason.rebuildable', 'advice.reason.custom',
+  'rules.title', 'rules.intro', 'rules.protected', 'rules.protectedHint', 'rules.recommended',
+  'rules.recommendedHint', 'rules.names', 'rules.namesHint', 'rules.add', 'rules.remove', 'rules.pickFolder',
+  'rules.pickFolderTitle', 'rules.pathPlaceholder', 'rules.namePlaceholder', 'rules.invalidPath',
+  'rules.invalidName', 'rules.tooBroad', 'rules.storedAt', 'rules.loadError', 'rules.empty', 'rules.clearAll',
+  'rules.clearAllConfirm', 'rules.save', 'rules.saving', 'rules.saveFailed', 'rules.loadFailed', 'rules.cancel',
   'common.back', 'common.close', 'common.loading', 'common.error',
   'prefs.unit', 'prefs.unitSi', 'prefs.unitIec', 'prefs.language',
   'types.images', 'types.video', 'types.audio', 'types.archives', 'types.code', 'types.documents', 'types.apps',
@@ -56,6 +69,56 @@ describe('dictionaries', () => {
     expect(body).toContain('{path}')
     expect(body).toContain('{size}')
     expect(body).toContain('{files}')
+  })
+
+  it.each(locales)('%s detail.protected, detail.recommended and delete.recommended contain {reason}', (l) => {
+    const missing = ['detail.protected', 'detail.recommended', 'delete.recommended']
+      .filter((k) => !dictionaries[l][k]?.includes('{reason}'))
+    expect(missing).toEqual([])
+  })
+
+  it.each(locales)('%s cleanup.summary contains {size} and {count}', (l) => {
+    const s = dictionaries[l]['cleanup.summary']
+    expect(s).toContain('{size}')
+    expect(s).toContain('{count}')
+  })
+
+  it.each(locales)('%s cleanup.body contains {count} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.body']
+    expect(s).toContain('{count}')
+    expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s cleanup.moreNotListed contains {n}', (l) => {
+    expect(dictionaries[l]['cleanup.moreNotListed']).toContain('{n}')
+  })
+
+  it.each(locales)('%s cleanup.selected contains {count} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.selected']
+    expect(s).toContain('{count}')
+    expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s cleanup.progress contains {done}, {total} and {name}', (l) => {
+    const s = dictionaries[l]['cleanup.progress']
+    expect(s).toContain('{done}')
+    expect(s).toContain('{total}')
+    expect(s).toContain('{name}')
+  })
+
+  it.each(locales)('%s cleanup.done contains {ok}, {failed} and {size}', (l) => {
+    const s = dictionaries[l]['cleanup.done']
+    expect(s).toContain('{ok}')
+    expect(s).toContain('{failed}')
+    expect(s).toContain('{size}')
+  })
+
+  it.each(locales)('%s rules.storedAt contains {path}', (l) => {
+    expect(dictionaries[l]['rules.storedAt']).toContain('{path}')
+  })
+
+  it.each(locales)('%s rules.loadError contains {error}', (l) => {
+    expect(dictionaries[l]['rules.loadError']).toContain('{error}')
   })
 })
 

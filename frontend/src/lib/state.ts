@@ -1,4 +1,5 @@
 import type { app } from '../../wailsjs/go/models'
+import type { Advice } from './advice'
 
 export type Phase = 'start' | 'scanning' | 'results'
 
@@ -10,6 +11,8 @@ export interface Item {
   isDir: boolean
   fileCount: number
   modTime: number
+  advice: Advice
+  reason: string
 }
 
 export interface UiState {
@@ -32,6 +35,7 @@ export type UiEvent =
   | { type: 'progress'; progress: app.Progress }
   | { type: 'finished'; event: app.FinishedEvent }
   | { type: 'treeChanged'; event: app.TreeChangedEvent }
+  | { type: 'rulesChanged' }
   | { type: 'navigate'; id: number }
   | { type: 'select'; item: Item | null }
   | { type: 'stale' }
@@ -102,6 +106,8 @@ export function reduce(s: UiState, e: UiEvent): UiState {
       if (s.currentID === e.event.RemovedID) {
         return { ...s, currentID: e.event.ParentID, revision: s.revision + 1 }
       }
+      return { ...s, revision: s.revision + 1 }
+    case 'rulesChanged':
       return { ...s, revision: s.revision + 1 }
     case 'navigate':
       return { ...s, currentID: e.id, selected: null }
