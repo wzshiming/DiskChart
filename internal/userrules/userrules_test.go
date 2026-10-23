@@ -268,13 +268,17 @@ func TestValidate(t *testing.T) {
 		hasSep   = "contains a path separator"
 	)
 	abs := filepath.Join(t.TempDir(), "x")
-	validPaths := []string{"~", "~/", "~/x", "~" + sep + "x", " ~/padded ", abs, abs + sep, " " + abs}
+	// broad paths name a whole home or volume: fine as Protected, too broad as Recommended (TestValidateRejectsBroadRecommended).
+	broad := []string{"~", "~/"}
+	validPaths := []string{"~/x", "~" + sep + "x", " ~/padded ", abs, abs + sep, " " + abs}
 	invalidPaths := []string{"a", "./a", "../a", "~user", "~~", "~ /x", "x/~", "a" + sep + "b"}
 	if runtime.GOOS == "windows" {
-		validPaths = append(validPaths, `C:\x`, `C:/x`, `c:\`, `\\srv\share`, `\\srv\share\x`, `~\x`)
+		broad = append(broad, `c:\`, `\\srv\share`)
+		validPaths = append(validPaths, `C:\x`, `C:/x`, `\\srv\share\x`, `~\x`)
 		invalidPaths = append(invalidPaths, `\x`, `/x`, `C:x`, `C:`)
 	} else {
-		validPaths = append(validPaths, "/", "/a", "/a/b/", "//a")
+		broad = append(broad, "/")
+		validPaths = append(validPaths, "/a", "/a/b/", "//a")
 		invalidPaths = append(invalidPaths, `C:\x`, `\\srv\share`, `~\x`, `\x`)
 	}
 	validNames := []string{"node_modules", ".cache", "a b", " padded ", "~", "...", "-"}
@@ -284,7 +288,11 @@ func TestValidate(t *testing.T) {
 	}
 
 	for _, list := range []string{"Protected", "Recommended"} {
-		for _, p := range validPaths {
+		valid := validPaths
+		if list == "Protected" {
+			valid = slices.Concat(validPaths, broad)
+		}
+		for _, p := range valid {
 			if err := userrules.Validate(oneRule(list, p)); err != nil {
 				t.Errorf("Validate(%s %q) = %v, want nil", list, p, err)
 			}
@@ -354,6 +362,114 @@ func TestValidate(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestValidateRejectsBroadRecommended(t *testing.T) {
+	hostRoot := filepath.VolumeName(t.TempDir()) + sep
+	// reason "" means the path is acceptable as Recommended.
+	type pathReason struct{ path, reason string }
+	cases := []pathReason{
+		{"~", "too broad"},
+		{"~/", "too broad"},
+		{"~//", "too broad"},
+		{"~/.", "too broad"},
+		{hostRoot, "too broad"},
+		{hostRoot + "x", ""},
+		{"~/x", ""},
+		{"~/.cache", ""},
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, pathReason{`~\`, "too broad"}, pathReason{`C:\`, "too broad"}, pathReason{`\\srv\share`, "too broad"})
+	} else {
+		cases = append(cases, pathReason{`~\`, "not absolute or ~-relative"})
+	}
+	for _, tc := range cases {
+		err := userrules.Validate(oneRule("Recommended", tc.path))
+		if tc.reason == "" {
+			if err != nil {
+				t.Errorf("Validate(Recommended %q) = %v, want nil", tc.path, err)
+			}
+			continue
+		}
+		want := "userrules: invalid rules:\nRecommended[0]: " + tc.reason + ": " + tc.path
+		if !errors.Is(err, userrules.ErrInvalidRules) || err.Error() != want {
+			t.Errorf("Validate(Recommended %q) = %v, want ErrInvalidRules reading %q", tc.path, err, want)
+		}
+	}
+}
+
+func TestValidateBroadOnlyForRecommended(t *testing.T) {
+	hostRoot := filepath.VolumeName(t.TempDir()) + sep
+	for _, p := range []string{"~", "~/", "~//", "~/.", hostRoot} {
+		if err := userrules.Validate(oneRule("Recommended", p)); !errors.Is(err, userrules.ErrInvalidRules) || !strings.Contains(err.Error(), "too broad") {
+			t.Errorf("Validate(Recommended %q) = %v, want ErrInvalidRules reading too broad", p, err)
+		}
+		if err := userrules.Validate(oneRule("Protected", p)); err != nil {
+			t.Errorf("Validate(Protected %q) = %v, want nil: Protected may cover a whole home or volume", p, err)
+		}
+	}
+	if err := userrules.Validate(oneRule("Names", "~")); err != nil {
+		t.Errorf("Validate(Names %q) = %v, want nil: ~ is a plain name", "~", err)
+	}
+}
+
+func TestValidateAggregatesBroadWithOthers(t *testing.T) {
+	hostRoot := filepath.VolumeName(t.TempDir()) + sep
+	r := advice.UserRules{Protected: []string{"rel"}, Recommended: []string{"~", hostRoot + "ok"}, Names: []string{"a/b"}}
+	want := strings.Join([]string{
+		"userrules: invalid rules:",
+		"Protected[0]: not absolute or ~-relative: rel",
+		"Recommended[0]: too broad: ~",
+		"Names[0]: contains a path separator: a/b",
+	}, "\n")
+	err := userrules.Validate(r)
+	if !errors.Is(err, userrules.ErrInvalidRules) {
+		t.Fatalf("Validate(%+v) = %v, want ErrInvalidRules", r, err)
+	}
+	if got := err.Error(); got != want {
+		t.Errorf("Validate(%+v) error =\n%s\nwant\n%s", r, got, want)
+	}
+}
+
+func TestLoadDecodeErrorReturnsZero(t *testing.T) {
+	s := store(t)
+	if err := os.WriteFile(s.File, []byte(`{"Protected":["/a"],"Names":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load()
+	if err == nil || !strings.Contains(err.Error(), s.File) {
+		t.Fatalf("Load() of a half-decodable file = %+v, %v, want an error naming %q", got, err, s.File)
+	}
+	if len(got.Protected)+len(got.Recommended)+len(got.Names) != 0 {
+		t.Errorf("Load() of a half-decodable file = %+v, want no rules at all rather than the part that decoded", got)
+	}
+}
+
+func TestSaveIntoDirectoryLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "rules.json")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, "marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (userrules.Store{File: target}).Save(advice.UserRules{Names: []string{"x"}}); err == nil {
+		t.Fatal("Save onto a directory = nil, want error")
+	}
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		t.Errorf("Stat(%s) = %v, %v after failed Save, want still a directory", target, fi, err)
+	}
+	if got := readFile(t, marker); got != "keep" {
+		t.Errorf("file inside the directory = %q after failed Save, want unchanged \"keep\"", got)
+	}
+	if tmps, _ := filepath.Glob(filepath.Join(dir, ".rules.json.tmp-*")); len(tmps) != 0 {
+		t.Errorf("failed Save left temporary files %v, want none", tmps)
+	}
+	if names := dirNames(t, dir); !slices.Equal(names, []string{"rules.json"}) {
+		t.Errorf("dir after failed Save holds %v, want [rules.json] only", names)
+	}
 }
 
 func TestNormalize(t *testing.T) {
@@ -429,8 +545,10 @@ func TestValidateMatchesAdvice(t *testing.T) {
 		t.Run(tc.path, func(t *testing.T) {
 			valid := tc.anchor != ""
 			for _, list := range []string{"Protected", "Recommended"} {
-				if err := userrules.Validate(oneRule(list, tc.path)); (err == nil) != valid {
-					t.Errorf("Validate(%s %q) = %v, want valid %v", list, tc.path, err, valid)
+				// Recommended refuses the whole home as too broad even though advice would anchor it.
+				wantValid := valid && !(list == "Recommended" && tc.path == "~")
+				if err := userrules.Validate(oneRule(list, tc.path)); (err == nil) != wantValid {
+					t.Errorf("Validate(%s %q) = %v, want valid %v", list, tc.path, err, wantValid)
 				}
 			}
 			protected := rules(advice.UserRules{Protected: []string{tc.path}})

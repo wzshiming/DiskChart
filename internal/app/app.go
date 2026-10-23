@@ -189,7 +189,7 @@ func (a *App) SetUserRules(r UserRules) error {
 	a.rulesLoadErr = ""
 	a.rebuildRules()
 	a.mu.Unlock()
-	a.rt.EventsEmit(EventRulesChanged, RulesChangedEvent{})
+	a.rt.EventsEmit(EventRulesChanged, RulesChangedEvent{Path: a.deps.UserRulesStore.Path()})
 	return nil
 }
 

@@ -123,7 +123,9 @@ func nonNil(r advice.UserRules) advice.UserRules {
 
 // Validate reports every entry the rules could not use, trimmed and with blank entries ignored: paths must be
 // absolute or ~ alone or ~ followed by a separator, and names must be single path segments other than . and ..
-// The error wraps ErrInvalidRules and lists one offender per line as Field[i]: reason: value.
+// A recommended path must also be narrower than the home directory or a volume root, which would mark
+// everything on it for cleanup. The error wraps ErrInvalidRules and lists one offender per line as
+// Field[i]: reason: value.
 func Validate(r advice.UserRules) error {
 	var lines []string
 	collect := func(field string, items []string, fault func(string) string) {
@@ -138,7 +140,7 @@ func Validate(r advice.UserRules) error {
 		}
 	}
 	collect("Protected", r.Protected, pathFault)
-	collect("Recommended", r.Recommended, pathFault)
+	collect("Recommended", r.Recommended, recommendedFault)
 	collect("Names", r.Names, nameFault)
 	if lines == nil {
 		return nil
@@ -152,6 +154,30 @@ func pathFault(p string) string {
 		return ""
 	}
 	return "not absolute or ~-relative"
+}
+
+// recommendedFault is pathFault, then rejects the home directory itself and volume roots.
+func recommendedFault(p string) string {
+	if reason := pathFault(p); reason != "" {
+		return reason
+	}
+	if tooBroad(p) {
+		return "too broad"
+	}
+	return ""
+}
+
+// tooBroad reports whether p, which passed pathFault, cleans to ~ alone or to a volume root.
+func tooBroad(p string) bool {
+	switch {
+	case p == "~":
+		return true
+	case len(p) > 1 && p[0] == '~' && os.IsPathSeparator(p[1]):
+		return filepath.Clean(p[1:]) == string(filepath.Separator)
+	default:
+		c := filepath.Clean(p)
+		return filepath.IsAbs(p) && filepath.Dir(c) == c
+	}
 }
 
 // nameFault says why n cannot be a directory base name, or "" when it can.
