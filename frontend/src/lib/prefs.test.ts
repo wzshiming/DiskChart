@@ -109,6 +109,19 @@ describe('unit preference', () => {
   })
 })
 
+describe('platform', () => {
+  it('getPlatform is "" before any platform is set', async () => {
+    const prefs = await load(undefined)
+    expect(prefs.getPlatform()).toBe('')
+  })
+
+  it('getPlatform returns the platform passed to setPlatform', async () => {
+    const prefs = await load(undefined)
+    prefs.setPlatform('darwin')
+    expect(prefs.getPlatform()).toBe('darwin')
+  })
+})
+
 describe('locale preference', () => {
   it('stored zh wins over an en navigator', async () => {
     const prefs = await load(fakeStorage({ 'DiskChart.locale': 'zh' }), 'en-US')
