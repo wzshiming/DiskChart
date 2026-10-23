@@ -308,6 +308,7 @@ export namespace app {
 	    }
 	}
 	
+	
 	export class ScanError {
 	    Path: string;
 	    Msg: string;

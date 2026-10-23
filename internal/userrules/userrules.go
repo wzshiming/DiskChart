@@ -167,13 +167,20 @@ func recommendedFault(p string) string {
 	return ""
 }
 
-// tooBroad reports whether p, which passed pathFault, cleans to ~ alone or to a volume root.
+// tooBroad reports whether p, which passed pathFault, cleans to ~ alone or to a volume root. It matches
+// advice's ~ expansion: a ~ path with nothing but a root left after the ~ is the home directory itself.
 func tooBroad(p string) bool {
 	switch {
 	case p == "~":
 		return true
 	case len(p) > 1 && p[0] == '~' && os.IsPathSeparator(p[1]):
-		return filepath.Clean(p[1:]) == string(filepath.Separator)
+		// A single leading separator is never read as a UNC prefix, unlike Clean(p[1:]) on Windows.
+		i := 1
+		for i < len(p) && os.IsPathSeparator(p[i]) {
+			i++
+		}
+		rooted := string(filepath.Separator) + p[i:]
+		return filepath.Clean(rooted) == string(filepath.Separator)
 	default:
 		c := filepath.Clean(p)
 		return filepath.IsAbs(p) && filepath.Dir(c) == c
